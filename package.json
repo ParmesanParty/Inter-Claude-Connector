@@ -1,0 +1,30 @@
+{
+  "name": "inter-claude-connector",
+  "version": "0.1.0",
+  "description": "Bidirectional communication protocol for Claude Code instances across hosts",
+  "type": "module",
+  "bin": {
+    "icc": "./bin/icc.ts",
+    "icc-mcp": "./bin/icc-mcp.ts"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.ts",
+    "start": "node bin/icc.ts serve",
+    "typecheck": "tsc --noEmit"
+  },
+  "keywords": [
+    "claude",
+    "connector",
+    "cli"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.27.1",
+    "node-notifier": "^10.0.1",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@types/node": "^25.3.3",
+    "typescript": "^5.9.3"
+  }
+}

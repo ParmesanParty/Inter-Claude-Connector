@@ -1,0 +1,42 @@
+{
+  "identity": "unnamed",
+  "instance": null,
+  "remotes": {},
+  "server": {
+    "port": 3179,
+    "host": "0.0.0.0",
+    "authToken": null,
+    "localToken": null,
+    "peerTokens": {},
+    "tls": {
+      "enabled": false,
+      "certPath": null,
+      "keyPath": null,
+      "caPath": null
+    },
+    "enrollPort": 4179
+  },
+  "tls": {
+    "ca": null
+  },
+  "transport": {
+    "order": ["http", "ssh"],
+    "sshTimeout": 30000,
+    "httpTimeout": 15000,
+    "healthCheckInterval": 60000
+  },
+  "security": {
+    "readfileEnabled": false,
+    "execEnabled": false,
+    "allowedPaths": ["~/code", "~/Code", "/tmp"],
+    "allowedCommands": ["ls", "cat", "head", "tail", "find", "grep", "git", "node", "npm"],
+    "maxExecTimeout": 30000
+  },
+  "claude": {
+    "outputFormat": "json",
+    "noSessionPersistence": true,
+    "permissionMode": "default",
+    "maxBudgetUsd": null,
+    "systemPromptAppend": null
+  }
+}

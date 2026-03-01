@@ -1,0 +1,7 @@
+node_modules/
+.icc/
+*.log
+.DS_Store
+.worktrees/
+docs/plans/
+.playwright-mcp/
