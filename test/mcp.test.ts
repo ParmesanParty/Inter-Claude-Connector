@@ -81,7 +81,7 @@ describe('MCP tool: send_prompt', () => {
     assert.ok(result.isError);
   });
 
-  it('passes transport and peer options through', async () => {
+  it('passes peer option to client', async () => {
     let capturedOptions: any;
     const mockClient = {
       send: async (_prompt: string, options: any) => {
@@ -90,8 +90,7 @@ describe('MCP tool: send_prompt', () => {
       },
     } as unknown as ICCClient;
     const handlers = createToolHandlers(mockClient);
-    await handlers.sendPrompt({ prompt: 'test', transport: 'ssh', peer: 'peerA' });
-    assert.equal(capturedOptions.transport, 'ssh');
+    await handlers.sendPrompt({ prompt: 'test', peer: 'peerA' });
     assert.equal(capturedOptions.peer, 'peerA');
   });
 });
