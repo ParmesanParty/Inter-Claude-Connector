@@ -41,20 +41,16 @@ describe('Heartbeat: watch writes heartbeat file', () => {
     try { rmSync(tmpHome, { recursive: true, force: true }); } catch {}
   });
 
-  it('watch creates heartbeat and PID files, deletes heartbeat on exit but keeps PID', () => {
+  it('watch creates heartbeat and PID files, deletes both on exit', () => {
     // Run watch with a very short timeout so it exits quickly
     const stdout = runHook('watch', { HOME: tmpHome }, ['--timeout', '1', '--interval', '1']);
     assert.ok(stdout.includes('[ICC] Watcher cycled'), 'should output watcher cycled');
 
-    // After exit, heartbeat should be deleted but PID file kept
-    // (PID file persists so isWatcherAlive() blocks duplicate launches
-    // until the process fully exits; new watcher overwrites it on start)
+    // After exit, both heartbeat and PID files should be deleted
     const iccDir = join(tmpHome, '.icc');
     const files = readdirSync(iccDir);
-    const heartbeatFiles = files.filter(f => f.includes('.heartbeat'));
-    const pidFiles = files.filter(f => f.includes('.pid'));
-    assert.equal(heartbeatFiles.length, 0, 'heartbeat should be deleted after watch exits');
-    assert.equal(pidFiles.length, 1, 'PID file should persist after normal exit');
+    const watcherFiles = files.filter(f => f.startsWith('watcher.'));
+    assert.equal(watcherFiles.length, 0, 'heartbeat and PID files should be deleted after watch exits');
   });
 
   it('watch starts even when a provisional heartbeat exists (startup race)', () => {
@@ -147,12 +143,10 @@ describe('Heartbeat: PID monitoring', () => {
     const stdout = runHook('watch', { HOME: tmpHome }, ['--pid', '999999', '--interval', '1']);
     // Dead PID → silent exit (no "Watcher cycled" since it exits before timeout)
     assert.ok(!stdout.includes('[ICC] Watcher cycled'), 'should exit before timeout');
-    // Heartbeat deleted, PID file persists (same as normal exit)
+    // Files should be cleaned up
     const files = readdirSync(join(tmpHome, '.icc'));
-    const heartbeatFiles = files.filter(f => f.includes('.heartbeat'));
-    const pidFiles = files.filter(f => f.includes('.pid'));
-    assert.equal(heartbeatFiles.length, 0, 'heartbeat should be cleaned up on PID death exit');
-    assert.equal(pidFiles.length, 1, 'PID file should persist after PID death exit');
+    const watcherFiles = files.filter(f => f.startsWith('watcher.'));
+    assert.equal(watcherFiles.length, 0, 'should clean up files on PID death exit');
   });
 });
 
