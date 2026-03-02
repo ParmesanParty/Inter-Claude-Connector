@@ -69,8 +69,6 @@ async function main() {
       return send();
     case 'status':
       return status();
-    case 'handle':
-      return handle();
     case 'init':
       return init();
     case 'config':
@@ -152,7 +150,6 @@ async function send() {
 
   try {
     const response = await client.send(prompt, {
-      transport: flags.transport as string | undefined,
       peer: flags.peer as string | undefined,
     });
 
@@ -187,45 +184,6 @@ async function status() {
   } catch (err) {
     console.error(`Error: ${(err as Error).message}`);
     process.exit(1);
-  }
-}
-
-async function handle(): Promise<void> {
-  // Internal command — receives a base64-encoded ICC message, processes it, outputs response
-  const encoded = flags.message as string;
-  if (!encoded) {
-    console.error('Usage: icc handle --message <base64-json>');
-    process.exit(1);
-  }
-
-  const { deserialize, serialize, createResponse, createError, createPong } = await import('../src/protocol.ts');
-  const { invokeClaudeCLI } = await import('../src/claude.ts');
-
-  try {
-    const json = Buffer.from(encoded, 'base64').toString('utf-8');
-    const message = deserialize(json);
-
-    let response;
-    if (message.type === 'ping') {
-      response = createPong(message.id);
-    } else if (message.type === 'request') {
-      const result = await invokeClaudeCLI('prompt' in message.payload ? (message.payload.prompt as string) : '');
-      response = createResponse(message.id, result);
-    } else {
-      response = createError(message.id, `Unsupported message type: ${message.type}`);
-    }
-
-    // Output only the serialized response to stdout — no logging
-    process.stdout.write(serialize(response));
-  } catch (err) {
-    // Even on error, output a valid protocol error message if possible
-    try {
-      const { createError: makeErr, serialize: ser } = await import('../src/protocol.ts');
-      process.stdout.write(ser(makeErr('unknown', (err as Error).message)));
-    } catch {
-      process.stderr.write(`Fatal: ${(err as Error).message}\n`);
-      process.exit(1);
-    }
   }
 }
 
@@ -897,9 +855,8 @@ Commands:
   serve [--port N] [--host H]              Start the ICC API server
   web [--port N]                            Start the web UI (default: port 3180)
   mcp                                       Start MCP server on stdio (for Claude Code)
-  send <prompt> [--peer P] [--transport T] Send a prompt to a peer instance
+  send <prompt> [--peer P]                  Send a prompt to a peer instance
   status                                    Check connectivity to all peers
-  handle --message <base64>                Handle an incoming message (internal)
   init [--identity I] [--peer P] [--force] Initialize config, tokens, per-peer auth
   config [--set key=value]                 Show or edit configuration
   hook <startup|check|shutdown|watch>      Lifecycle hooks for Claude Code sessions
@@ -910,7 +867,6 @@ Commands:
 Options:
   --peer P        Target peer identity (e.g. laptop, server). Required if
                   multiple peers are configured; auto-resolved if only one.
-  --transport T   Force transport: http or ssh (default: auto failover)
 
 Examples:
   icc init --identity mars                   # set identity + generate tokens

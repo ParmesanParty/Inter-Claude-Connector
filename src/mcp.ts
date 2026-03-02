@@ -170,12 +170,11 @@ function resolvePeer(config: ICCConfig, options: { peer?: string; to?: string } 
  */
 export function createToolHandlers(client: ICCClient, peerAPIFn: PeerAPIFunction = peerAPI, localAPIFn: APIFunction = localAPI) {
   return {
-    async sendPrompt({ prompt, context, transport, peer }: { prompt: string; context?: string; transport?: string; peer?: string }): Promise<MCPToolResult> {
+    async sendPrompt({ prompt, context, peer }: { prompt: string; context?: string; peer?: string }): Promise<MCPToolResult> {
       try {
         log.info(`send_prompt: "${prompt.slice(0, 80)}..."`);
         const response = await client.send(prompt, {
           context: context ? { text: context } : {},
-          transport,
           peer,
         });
         const result = 'result' in response.payload ? response.payload.result : undefined;
@@ -192,9 +191,9 @@ export function createToolHandlers(client: ICCClient, peerAPIFn: PeerAPIFunction
       }
     },
 
-    async pingRemote({ transport, peer }: { transport?: string; peer?: string } = {}): Promise<MCPToolResult> {
+    async pingRemote({ peer }: { peer?: string } = {}): Promise<MCPToolResult> {
       try {
-        const result = await client.ping({ transport, peer });
+        const result = await client.ping({ peer });
         const text = `Pong from ${result.from || 'remote'} — latency: ${result.latencyMs}ms`;
         return { content: [{ type: 'text', text }] };
       } catch (err) {
@@ -656,7 +655,6 @@ export function createMCPServer() {
       inputSchema: z.object({
         prompt: z.string().describe('The prompt to send to the remote Claude'),
         context: z.string().optional().describe('Optional metadata string sent alongside the prompt to the remote Claude (e.g. background info). Not prepended to the prompt itself.'),
-        transport: z.enum(['http', 'ssh']).optional().describe('Force a specific transport (default: auto)'),
         peer: z.string().optional().describe('Target peer identity (e.g. "laptop", "server"). Required if multiple peers are configured.'),
       }),
     },
@@ -668,7 +666,6 @@ export function createMCPServer() {
     {
       description: 'Check connectivity and latency to the remote ICC host. Returns the remote host\'s identity and round-trip latency in milliseconds.',
       inputSchema: z.object({
-        transport: z.enum(['http', 'ssh']).optional().describe('Force a specific transport (default: auto)'),
         peer: z.string().optional().describe('Target peer identity (e.g. "laptop", "server"). Required if multiple peers are configured.'),
       }),
     },
