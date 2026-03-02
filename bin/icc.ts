@@ -520,20 +520,28 @@ async function hook() {
         writeWatcherPid(instanceName);
         writeHeartbeat(instanceName);
 
-        const cleanup = () => {
-          deleteWatcherPid(instanceName);
+        // On normal exit (mail/timeout/pid-gone), only delete heartbeat.
+        // Keep PID file so isWatcherAlive() returns true until process
+        // fully exits — prevents a race where a new watcher launches
+        // while this process is still shutting down.
+        // The new watcher's writeWatcherPid() overwrites it on launch.
+        const stopWatching = () => {
           deleteHeartbeat(instanceName);
         };
 
-        // Graceful shutdown on signals
-        const onSignal = () => { cleanup(); process.exit(0); };
+        // Graceful shutdown on signals — full cleanup including PID
+        const onSignal = () => {
+          deleteWatcherPid(instanceName);
+          deleteHeartbeat(instanceName);
+          process.exit(0);
+        };
         process.on('SIGTERM', onSignal);
         process.on('SIGINT', onSignal);
 
         // Immediate check
         const signal = checkSignalFiles(instanceName);
         if (signal) {
-          cleanup();
+          stopWatching();
           process.stdout.write(`[ICC] Mail received\n${signal}\n`);
           return resolve();
         }
@@ -546,7 +554,7 @@ async function hook() {
             try {
               process.kill(monitorPid, 0);
             } catch {
-              cleanup();
+              stopWatching();
               clearInterval(poll);
               clearTimeout(maxTimer);
               resolve();
@@ -556,7 +564,7 @@ async function hook() {
 
           const signal = checkSignalFiles(instanceName);
           if (signal) {
-            cleanup();
+            stopWatching();
             process.stdout.write(`[ICC] Mail received\n${signal}\n`);
             clearInterval(poll);
             clearTimeout(maxTimer);
@@ -565,7 +573,7 @@ async function hook() {
         }, interval);
 
         const maxTimer = setTimeout(() => {
-          cleanup();
+          stopWatching();
           clearInterval(poll);
           process.stdout.write('[ICC] Watcher cycled\n');
           resolve();
