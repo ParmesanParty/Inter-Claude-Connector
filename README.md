@@ -16,8 +16,7 @@ ICC lets Claude Code sessions on different machines talk to each other:
 - **Instance discovery** — find which Claude Code sessions are active
   across the mesh
 
-Communication happens over HTTPS with mutual TLS, falling back to SSH
-if HTTP is unreachable. Claude Code integrates via
+Communication happens over HTTPS with mutual TLS. Claude Code integrates via
 [MCP](https://modelcontextprotocol.io/) (10 tools) and lifecycle hooks.
 
 ## Architecture
@@ -41,8 +40,8 @@ if HTTP is unreachable. Claude Code integrates via
   host. No central broker.
 - **Per-peer auth** — each host pair exchanges dedicated tokens.
   No shared secrets.
-- **Transport failover** — HTTPS/mTLS (primary) → SSH (fallback), with
-  sticky last-working selection.
+- **HTTPS/mTLS** — all peer communication uses mutual TLS with
+  Ed25519 certificates.
 - **PID-based liveness** — the server prunes stale instance registrations
   by checking process liveness.
 
@@ -195,9 +194,8 @@ src/
   client.ts           High-level send wrapper
   peers.ts            PeerRouter (multi-peer routing)
   transport/
-    index.ts          TransportManager (failover logic)
+    index.ts          TransportManager
     http.ts           HTTPS/mTLS transport
-    ssh.ts            SSH transport
   inbox.ts            Persistent inbox with threading
   protocol.ts         Message schema and validation
   config.ts           Config loader with deep merge
@@ -209,7 +207,6 @@ src/
   notify.ts           Desktop notifications
   util/
     logger.ts         Logger (writes to stderr)
-    wol.ts            Wake-on-LAN
 config/
   default.json        Default configuration
 docs/
