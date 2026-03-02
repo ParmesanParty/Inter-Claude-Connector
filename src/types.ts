@@ -64,6 +64,7 @@ export interface SecurityConfig {
   execEnabled: boolean;
   allowedPaths: string[];
   allowedCommands: string[];
+  allowedSubcommands: Record<string, string[]>;
   maxExecTimeout: number;
 }
 

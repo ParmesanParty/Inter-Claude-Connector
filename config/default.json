@@ -26,8 +26,16 @@
   "security": {
     "readfileEnabled": false,
     "execEnabled": false,
-    "allowedPaths": ["~/code", "~/Code", "/tmp"],
-    "allowedCommands": ["ls", "cat", "head", "tail", "find", "grep", "git", "node", "npm"],
+    "allowedPaths": ["~/code", "~/Code", "/tmp", "~/.icc"],
+    "allowedCommands": ["ls", "cat", "head", "tail", "find", "grep", "git"],
+    "allowedSubcommands": {
+      "git": [
+        "status", "log", "diff", "show", "branch", "tag",
+        "shortlog", "blame", "reflog", "describe",
+        "rev-parse", "ls-files", "ls-tree", "cat-file",
+        "rev-list", "for-each-ref", "name-rev"
+      ]
+    },
     "maxExecTimeout": 30000
   },
   "claude": {

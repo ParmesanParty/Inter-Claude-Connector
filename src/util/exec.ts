@@ -41,6 +41,27 @@ export function isCommandAllowed(command: string, allowedCommands: string[]): bo
   return allowedCommands.includes(base!);
 }
 
+// Git global flags that consume the next argument as a value
+const GIT_FLAGS_WITH_VALUE = new Set(['-C', '-c', '--git-dir', '--work-tree', '--namespace', '--super-prefix', '--config-env']);
+
+export function isSubcommandAllowed(command: string, args: string[], allowedSubcommands: Record<string, string[]>): boolean {
+  const base = command.split('/').pop()!;
+  const restricted = allowedSubcommands[base];
+  if (!restricted) return true; // no subcommand restrictions for this command
+
+  // Find subcommand: skip flags and their values
+  let i = 0;
+  while (i < args.length) {
+    const arg = args[i]!;
+    if (!arg.startsWith('-')) return restricted.includes(arg);
+    // Skip flags that consume the next arg as a value
+    if (GIT_FLAGS_WITH_VALUE.has(arg)) i++; // skip the value too
+    i++;
+  }
+
+  return true; // bare command with only flags (e.g. `git --version`)
+}
+
 export async function safeReadFile(filePath: string): Promise<ReadFileResult> {
   const config = loadConfig();
   const { readfileEnabled, allowedPaths } = config.security;
@@ -70,6 +91,13 @@ export function safeExec(command: string, args: string[] = [], options: ExecOpti
 
   if (!isCommandAllowed(command, allowedCommands)) {
     return Promise.reject(new Error(`Command not in allowed list: ${command}. Allowed: ${allowedCommands.join(', ')}`));
+  }
+
+  const { allowedSubcommands } = config.security;
+  if (!isSubcommandAllowed(command, args, allowedSubcommands)) {
+    const base = command.split('/').pop()!;
+    const sub = args.find(a => !a.startsWith('-'));
+    return Promise.reject(new Error(`Subcommand not allowed: ${base} ${sub}. Allowed: ${allowedSubcommands[base]!.join(', ')}`));
   }
 
   const timeout = Math.min(options.timeout || maxExecTimeout, maxExecTimeout);

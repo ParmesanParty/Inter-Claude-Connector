@@ -1,6 +1,6 @@
 import { describe, it, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { isPathAllowed, isCommandAllowed, safeReadFile, safeExec } from '../src/util/exec.ts';
+import { isPathAllowed, isCommandAllowed, isSubcommandAllowed, safeReadFile, safeExec } from '../src/util/exec.ts';
 import { clearConfigCache, loadConfig } from '../src/config.ts';
 import { createICCServer } from '../src/server.ts';
 import { reset as resetLog } from '../src/log.ts';
@@ -78,23 +78,70 @@ describe('Path validation', () => {
 });
 
 describe('Command validation', () => {
-  const allowed = ['ls', 'cat', 'head', 'tail', 'find', 'grep', 'git', 'node', 'npm'];
+  const allowed = ['ls', 'cat', 'head', 'tail', 'find', 'grep', 'git'];
 
   it('allows commands in the list', () => {
     assert.ok(isCommandAllowed('ls', allowed));
     assert.ok(isCommandAllowed('git', allowed));
-    assert.ok(isCommandAllowed('node', allowed));
   });
 
   it('rejects commands not in the list', () => {
     assert.ok(!isCommandAllowed('rm', allowed));
     assert.ok(!isCommandAllowed('curl', allowed));
     assert.ok(!isCommandAllowed('ssh', allowed));
+    assert.ok(!isCommandAllowed('node', allowed));
+    assert.ok(!isCommandAllowed('npm', allowed));
   });
 
   it('handles full paths by extracting base command', () => {
     assert.ok(isCommandAllowed('/usr/bin/git', allowed));
     assert.ok(!isCommandAllowed('/usr/bin/rm', allowed));
+  });
+});
+
+describe('Subcommand validation', () => {
+  const allowedSubs: Record<string, string[]> = {
+    git: ['status', 'log', 'diff', 'show', 'branch', 'tag', 'blame', 'rev-parse', 'ls-files'],
+  };
+
+  it('allows read-only git subcommands', () => {
+    assert.ok(isSubcommandAllowed('git', ['status'], allowedSubs));
+    assert.ok(isSubcommandAllowed('git', ['log', '--oneline', '-10'], allowedSubs));
+    assert.ok(isSubcommandAllowed('git', ['diff', 'HEAD~1'], allowedSubs));
+    assert.ok(isSubcommandAllowed('git', ['branch', '-a'], allowedSubs));
+  });
+
+  it('rejects write git subcommands', () => {
+    assert.ok(!isSubcommandAllowed('git', ['push'], allowedSubs));
+    assert.ok(!isSubcommandAllowed('git', ['commit', '-m', 'msg'], allowedSubs));
+    assert.ok(!isSubcommandAllowed('git', ['checkout', 'main'], allowedSubs));
+    assert.ok(!isSubcommandAllowed('git', ['reset', '--hard'], allowedSubs));
+    assert.ok(!isSubcommandAllowed('git', ['add', '.'], allowedSubs));
+    assert.ok(!isSubcommandAllowed('git', ['merge', 'feature'], allowedSubs));
+    assert.ok(!isSubcommandAllowed('git', ['rebase', 'main'], allowedSubs));
+    assert.ok(!isSubcommandAllowed('git', ['rm', 'file.txt'], allowedSubs));
+    assert.ok(!isSubcommandAllowed('git', ['clean', '-fd'], allowedSubs));
+    assert.ok(!isSubcommandAllowed('git', ['stash'], allowedSubs));
+  });
+
+  it('allows bare command with only flags', () => {
+    assert.ok(isSubcommandAllowed('git', ['--version'], allowedSubs));
+    assert.ok(isSubcommandAllowed('git', ['-C', '/tmp'], allowedSubs));
+  });
+
+  it('skips leading flags to find subcommand', () => {
+    assert.ok(isSubcommandAllowed('git', ['-C', '/tmp', 'status'], allowedSubs));
+    assert.ok(!isSubcommandAllowed('git', ['-C', '/tmp', 'push'], allowedSubs));
+  });
+
+  it('allows any subcommand for unrestricted commands', () => {
+    assert.ok(isSubcommandAllowed('ls', ['-la', '/tmp'], allowedSubs));
+    assert.ok(isSubcommandAllowed('grep', ['-r', 'pattern', '.'], allowedSubs));
+  });
+
+  it('handles full paths by extracting base command', () => {
+    assert.ok(isSubcommandAllowed('/usr/bin/git', ['status'], allowedSubs));
+    assert.ok(!isSubcommandAllowed('/usr/bin/git', ['push'], allowedSubs));
   });
 });
 
