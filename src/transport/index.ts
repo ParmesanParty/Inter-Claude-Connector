@@ -30,6 +30,7 @@ export class TransportManager {
 
   async send(message: Message): Promise<Message> {
     log.info('Sending via HTTP transport');
+    message.transport = 'http';
     return this._http.send(message);
   }
 
