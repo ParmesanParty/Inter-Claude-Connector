@@ -55,8 +55,6 @@ export interface ServerConfig {
 }
 
 export interface TransportConfig {
-  order: TransportName[];
-  sshTimeout: number;
   httpTimeout: number;
   healthCheckInterval: number;
 }
@@ -79,10 +77,7 @@ export interface ClaudeConfig {
 
 export interface RemoteConfig {
   httpUrl?: string;
-  sshHost?: string;
-  projectDir?: string;
   token?: string;
-  wolMac?: string;
 }
 
 export interface ICCConfig {
@@ -97,15 +92,6 @@ export interface ICCConfig {
 }
 
 // ── Transport ───────────────────────────────────────────────────────
-
-export type TransportName = 'http' | 'ssh';
-
-export interface TransportConnectivityResult {
-  available: boolean;
-  latencyMs: number | null;
-}
-
-export type ConnectivityResults = Record<string, TransportConnectivityResult>;
 
 export interface Transport {
   send(message: Message): Promise<Message>;

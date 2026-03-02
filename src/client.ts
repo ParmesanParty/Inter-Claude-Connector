@@ -9,12 +9,10 @@ const log = createLogger('client');
 interface SendOptions {
   peer?: string;
   context?: Record<string, unknown>;
-  transport?: string;
 }
 
 interface PingOptions {
   peer?: string;
-  transport?: string;
 }
 
 interface PingResult {
@@ -46,9 +44,7 @@ export class ICCClient {
     log.info(`Sending request ${message.id} to peer "${peerIdentity}"`);
     record(message);
 
-    const response = options.transport
-      ? await this.router.sendVia(peerIdentity, options.transport, message)
-      : await this.router.send(peerIdentity, message);
+    const response = await this.router.send(peerIdentity, message);
 
     if (!validate(response)) {
       throw new Error('Received invalid response from remote');
@@ -69,9 +65,7 @@ export class ICCClient {
     const message = createPing();
     const start = Date.now();
 
-    const response = options.transport
-      ? await this.router.sendVia(peerIdentity, options.transport, message)
-      : await this.router.send(peerIdentity, message);
+    const response = await this.router.send(peerIdentity, message);
 
     return {
       pong: response.type === 'pong',

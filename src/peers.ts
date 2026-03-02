@@ -2,7 +2,7 @@ import { TransportManager } from './transport/index.ts';
 import { loadConfig, getPeerIdentities } from './config.ts';
 import { parseAddress } from './address.ts';
 import { createLogger } from './util/logger.ts';
-import type { Message, ConnectivityResults } from './types.ts';
+import type { Message } from './types.ts';
 
 const log = createLogger('peers');
 
@@ -41,13 +41,8 @@ export class PeerRouter {
     return tm.send(message);
   }
 
-  async sendVia(peerIdentity: string, transportName: string, message: Message): Promise<Message> {
-    const tm = this.getTransport(peerIdentity);
-    return tm.sendVia(transportName, message);
-  }
-
-  async checkAllConnectivity(): Promise<Record<string, ConnectivityResults>> {
-    const results: Record<string, ConnectivityResults> = {};
+  async checkAllConnectivity(): Promise<Record<string, Record<string, { available: boolean; latencyMs: number | null }>>> {
+    const results: Record<string, Record<string, { available: boolean; latencyMs: number | null }>> = {};
     const checks = [...this._peers.entries()].map(async ([identity, tm]) => {
       results[identity] = await tm.checkConnectivity();
     });

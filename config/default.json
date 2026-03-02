@@ -20,8 +20,6 @@
     "ca": null
   },
   "transport": {
-    "order": ["http", "ssh"],
-    "sshTimeout": 30000,
     "httpTimeout": 15000,
     "healthCheckInterval": 60000
   },
