@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { readFileSync, writeFileSync, mkdirSync, existsSync, unlinkSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync, existsSync, unlinkSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { randomBytes } from 'node:crypto';
@@ -467,18 +467,83 @@ function isWatcherAlive(instanceName: string): boolean {
   }
 }
 
+/**
+ * Check if ANY watcher process is alive across all instances.
+ * Prevents duplicate watchers when cwd changes (e.g. worktree → main),
+ * which changes instanceName and bypasses instance-specific PID checks.
+ */
+function isAnyWatcherAlive(): boolean {
+  const iccDir = join(homedir(), '.icc');
+  try {
+    const files = readdirSync(iccDir);
+    for (const f of files) {
+      if (!f.startsWith('watcher.') || !f.endsWith('.pid')) continue;
+      const inst = f.slice('watcher.'.length, -'.pid'.length);
+      if (isWatcherAlive(inst)) return true;
+    }
+  } catch { /* dir may not exist */ }
+  return false;
+}
+
+/**
+ * Session instance file: persists the instance name established at startup
+ * so that subsequent hooks (which may run from a different cwd, e.g. a
+ * worktree) always use the session's original instance identity.
+ * File: ~/.icc/session.<claudeCodePid>.instance
+ */
+function sessionInstancePath(ccPid: number): string {
+  return join(homedir(), '.icc', `session.${ccPid}.instance`);
+}
+
+function writeSessionInstance(instanceName: string): void {
+  try {
+    writeFileSync(sessionInstancePath(getClaudeCodePid()), instanceName);
+  } catch { /* non-fatal */ }
+}
+
+function getSessionInstanceName(fallbackInstanceName: string): string {
+  try {
+    const path = sessionInstancePath(getClaudeCodePid());
+    if (existsSync(path)) {
+      return readFileSync(path, 'utf-8').trim();
+    }
+  } catch { /* fall through */ }
+  return fallbackInstanceName;
+}
+
+function deleteSessionInstance(): void {
+  try {
+    unlinkSync(sessionInstancePath(getClaudeCodePid()));
+  } catch { /* non-fatal */ }
+}
+
 async function hook() {
   const subcommand = positional[0];
   const { resolve: resolveInstance } = await import('../src/instances.ts');
   const { loadConfig } = await import('../src/config.ts');
 
-  const instanceName = resolveInstance(process.cwd());
+  const cwdInstanceName = resolveInstance(process.cwd());
+  const instanceName = subcommand === 'startup'
+    ? cwdInstanceName
+    : getSessionInstanceName(cwdInstanceName);
   const config = loadConfig();
   const port = config.server.port;
   const authToken = config.server.localToken || config.server.authToken;
 
   switch (subcommand) {
     case 'startup': {
+      // Clean stale session files from dead PIDs
+      const iccDir = join(homedir(), '.icc');
+      try {
+        for (const f of readdirSync(iccDir)) {
+          if (!f.startsWith('session.') || !f.endsWith('.instance')) continue;
+          const pid = parseInt(f.slice('session.'.length, -'.instance'.length), 10);
+          if (isNaN(pid)) continue;
+          try { process.kill(pid, 0); } catch {
+            try { unlinkSync(join(iccDir, f)); } catch { /* ignore */ }
+          }
+        }
+      } catch { /* non-fatal */ }
       // Write a provisional heartbeat so that `check` (which may fire before
       // the watcher process starts) does not falsely report "Watcher not running".
       // The watcher will overwrite this with its own heartbeat once it starts;
@@ -512,6 +577,8 @@ async function hook() {
           req.end();
         });
       } catch { /* non-fatal */ }
+      // Persist instance name for subsequent hooks (survives cwd changes)
+      writeSessionInstance(instanceName);
       // Check signal files → stdout
       const signal = checkSignalFiles(instanceName);
       if (signal) process.stdout.write(signal + '\n');
@@ -547,10 +614,10 @@ async function hook() {
     }
 
     case 'watch': {
-      // Guard: if another watcher process is already alive, exit immediately.
-      // Uses a PID file (not the heartbeat) to avoid a race with the
-      // provisional heartbeat written by `startup`.
-      if (isWatcherAlive(instanceName)) {
+      // Guard: if any watcher process is already alive, exit immediately.
+      // Uses isAnyWatcherAlive() to catch cross-instance duplicates
+      // (e.g. watcher launched from worktree, then cwd changes to main).
+      if (isAnyWatcherAlive()) {
         process.stdout.write('[ICC] Watcher already active — do not spawn another\n');
         break;
       }
@@ -637,6 +704,7 @@ async function hook() {
       // Clean up files in case SIGTERM handler didn't fire
       deleteWatcherPid(instanceName);
       deleteHeartbeat(instanceName);
+      deleteSessionInstance();
       break;
     }
 
@@ -678,7 +746,7 @@ async function hook() {
 
       // Guard 2: Prevent duplicate watcher launches
       if (/icc\s+hook\s+watch\b/.test(command) && !/--timeout\s+[012]\b/.test(command)) {
-        if (isWatcherAlive(instanceName)) {
+        if (isAnyWatcherAlive()) {
           const out = JSON.stringify({
             hookSpecificOutput: {
               hookEventName: 'PreToolUse',
