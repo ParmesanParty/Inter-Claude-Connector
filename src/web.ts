@@ -1,34 +1,12 @@
 import { createServer, request as httpRequest } from 'node:http';
 import { request as httpsRequest } from 'node:https';
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import { loadConfig, getPeerIdentities, getTlsOptions, createIdentityVerifier } from './config.ts';
-import { ICCClient } from './client.ts';
+import { loadConfig, getPeerIdentities, getFullAddress, getTlsOptions, createIdentityVerifier } from './config.ts';
 import { createLogger } from './util/logger.ts';
 import { readBody } from './util/http.ts';
-import { init as initLog } from './log.ts';
 import type { ICCConfig } from './types.ts';
 
 const log = createLogger('web');
-
-function pushToLocalServer(config: ICCConfig, message: unknown): void {
-  const tlsOpts = getTlsOptions(config);
-  const protocol = tlsOpts ? 'https' : 'http';
-  const requestFn = tlsOpts ? httpsRequest : httpRequest;
-  const url = new URL('/api/record', `${protocol}://127.0.0.1:${config.server.port}`);
-  const payload = JSON.stringify(message);
-  const req = requestFn(url, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Content-Length': Buffer.byteLength(payload),
-      ...((config.server.localToken || config.server.authToken) && { 'Authorization': `Bearer ${config.server.localToken || config.server.authToken}` }),
-    },
-    ...(tlsOpts ? { ...tlsOpts, checkServerIdentity: createIdentityVerifier(config.identity) } : {}),
-  });
-  req.on('error', (err) => log.warn(`Failed to push to local server: ${err.message}`));
-  req.write(payload);
-  req.end();
-}
 
 interface ProxyTarget {
   baseUrl: string;
@@ -155,17 +133,13 @@ function getHTML(config: ICCConfig): string {
   #chat::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
 
   .message { max-width: min(82%, var(--content-max)); padding: 10px 14px; border-radius: 8px; font-size: 13px; line-height: 1.6; position: relative; border: 1px solid var(--sender-color, var(--border)); background: var(--sender-bg, var(--surface)); }
-  .message.local { align-self: flex-end; }
-  .message.remote { align-self: flex-start; }
+  .message { align-self: flex-start; }
   .message .meta { font-size: 11px; color: var(--muted); margin-bottom: 6px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
   .message .meta .identity { font-weight: 600; color: var(--sender-color, var(--accent)); }
   .message .meta .recipient { color: var(--muted); }
   .message .meta .recipient .addr { color: var(--text); font-weight: 500; }
   .message .meta .badge { background: var(--border); padding: 1px 5px; border-radius: 3px; font-size: 10px; }
   .message .body { white-space: pre-wrap; word-break: break-word; }
-  .message.error { border-color: var(--red); }
-  .message.error .meta .identity { color: var(--red); }
-  .message.response { opacity: 0.95; }
   .message .reply-link { font-size: 10px; color: var(--muted); margin-top: 6px; cursor: pointer; text-decoration: none; display: inline-block; }
   .message .reply-link:hover { color: var(--accent); }
   .message.inbox { border-left: 3px solid var(--sender-color, var(--inbox-accent)); }
@@ -276,8 +250,8 @@ function getHTML(config: ICCConfig): string {
 <button class="scroll-btn" id="scroll-btn">&#8595; New messages</button>
 
 <div class="input-bar">
-  <textarea id="input" placeholder="Send a prompt..." rows="1"></textarea>
-  ${peers.length > 0 ? `<select id="peer-select">${peers.map(p => `<option value="${p}">${p}</option>`).join('')}</select>` : ''}
+  <textarea id="input" placeholder="Send a message..." rows="1"></textarea>
+  <select id="addr-select"><option value="">Loading...</option></select>
   <button id="send-btn">Send</button>
 </div>
 </div>
@@ -300,13 +274,13 @@ var chat = document.getElementById('chat');
 var input = document.getElementById('input');
 var sendBtn = document.getElementById('send-btn');
 var scrollBtn = document.getElementById('scroll-btn');
-var peerSelect = document.getElementById('peer-select');
-var seenIds = new Set();
+var addrSelect = document.getElementById('addr-select');
 var autoScroll = true;
 var initialLoadDone = false;
 var seenInboxIds = new Set();
+var seenMulticastKeys = new Set();
 var inboxPollTimer = null;
-var INBOX_POLL_INTERVAL = 10000;
+var INBOX_POLL_INTERVAL = 30000;
 var latestInboxTimestamp = null;
 var inboxInitialLoadDone = false;
 
@@ -534,10 +508,10 @@ input.addEventListener('input', function() {
   this.style.height = Math.min(this.scrollHeight, 120) + 'px';
 });
 input.addEventListener('keydown', function(e) {
-  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendPrompt(); }
+  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendInboxMessage(); }
 });
 scrollBtn.addEventListener('click', scrollToBottom);
-sendBtn.addEventListener('click', sendPrompt);
+sendBtn.addEventListener('click', sendInboxMessage);
 document.getElementById('refresh-btn').addEventListener('click', function() {
   if (inboxPollTimer) clearInterval(inboxPollTimer);
   refreshInbox();
@@ -563,19 +537,6 @@ function formatTime(ts) {
   return date + ', ' + time;
 }
 
-function extractText(payload, type) {
-  if (type === 'request') return payload.prompt || '';
-  if (type === 'error') return 'Error: ' + (payload.error || '');
-  if (type === 'response') {
-    var r = payload.result;
-    if (!r) return '';
-    if (typeof r === 'object' && r.result) return r.result;
-    if (typeof r === 'string') return r;
-    return JSON.stringify(r, null, 2);
-  }
-  return JSON.stringify(payload);
-}
-
 function createBadge(text) {
   var span = document.createElement('span');
   span.className = 'badge';
@@ -590,8 +551,7 @@ function createReplyLink(replyToId) {
   link.href = '#';
   link.onclick = function(e) {
     e.preventDefault();
-    var target = document.querySelector('[data-id="' + replyToId + '"]')
-      || document.querySelector('[data-inbox-id="' + replyToId + '"]');
+    var target = document.querySelector('[data-inbox-id="' + replyToId + '"]');
     if (target) {
       target.scrollIntoView({ behavior: 'smooth', block: 'center' });
       target.style.outline = '1px solid var(--accent)';
@@ -675,64 +635,6 @@ function applySenderStyle(el, from) {
   el.style.setProperty('--sender-bg', hexToRgba(color, 0.08));
 }
 
-function addMessage(msg, serverUrl) {
-  if (seenIds.has(msg.id)) return;
-  seenIds.add(msg.id);
-
-  var empty = chat.querySelector('.empty-state');
-  if (empty) empty.remove();
-
-  var div = document.createElement('div');
-  div.className = 'message local';
-  if (msg.type === 'error') div.className += ' error';
-  if (msg.type === 'response') div.className += ' response';
-  div.dataset.id = msg.id;
-  div.dataset.timestamp = msg.timestamp;
-  applySenderStyle(div, msg.from);
-
-  var meta = document.createElement('div');
-  meta.className = 'meta';
-  var identitySpan = document.createElement('span');
-  identitySpan.className = 'identity';
-  identitySpan.textContent = msg.from;
-  meta.appendChild(identitySpan);
-  if (msg.type !== 'request') meta.appendChild(createBadge(msg.type));
-  if (msg.transport) meta.appendChild(createBadge(msg.transport));
-  var timeSpan = document.createElement('span');
-  timeSpan.textContent = formatTime(msg.timestamp);
-  meta.appendChild(timeSpan);
-
-  var body = document.createElement('div');
-  body.className = 'body';
-  setMarkdownBody(body, extractText(msg.payload, msg.type));
-  meta.appendChild(createMarkdownToggle(body));
-  div.appendChild(meta);
-  div.appendChild(body);
-  if (msg.replyTo) div.appendChild(createReplyLink(msg.replyTo));
-
-  var actions = document.createElement('div');
-  actions.className = 'inbox-actions';
-  var delBtn = document.createElement('button');
-  delBtn.textContent = 'Delete';
-  delBtn.onclick = function() { deleteLogMessage(msg.id, div); };
-  actions.appendChild(delBtn);
-  div.appendChild(actions);
-
-  insertChronologically(div);
-  if (initialLoadDone && autoScroll) scrollToBottom();
-}
-
-async function loadHistory(host) {
-  try {
-    var res = await fetch(host.url + '/api/log');
-    if (!res.ok) throw new Error(res.status);
-    var msgs = await res.json();
-    msgs.forEach(function(m) { addMessage(m, host.url); });
-  } catch (err) {
-    console.warn('Failed to load history from ' + host.identity + ':', err);
-  }
-}
-
 function connectSSE(host, idx) {
   var dot = document.getElementById('dot-' + idx);
   var lbl = document.getElementById('lbl-' + idx);
@@ -744,7 +646,7 @@ function connectSSE(host, idx) {
       lbl.textContent = host.identity + ' connected';
     };
     es.onmessage = function(e) {
-      try { addMessage(JSON.parse(e.data), host.url); } catch {}
+      try { addInboxMessage(JSON.parse(e.data), host.url); } catch {}
     };
     es.onerror = function() {
       dot.className = 'dot err';
@@ -771,20 +673,20 @@ async function checkHealth(host, idx) {
   }
 }
 
-async function sendPrompt() {
+async function sendInboxMessage() {
   var text = input.value.trim();
   if (!text) return;
+  var to = addrSelect ? addrSelect.value : '';
+  if (!to) { console.error('No address selected'); return; }
   sendBtn.disabled = true;
   input.value = '';
   input.style.height = 'auto';
-
-  var peer = peerSelect ? peerSelect.value : undefined;
 
   try {
     var res = await fetch('/send', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ prompt: text, peer: peer }),
+      body: JSON.stringify({ body: text, to: to }),
     });
     var data = await res.json();
     if (data.error) console.error('Send error:', data.error);
@@ -816,11 +718,18 @@ function addInboxMessage(msg, serverUrl) {
   seenInboxIds.add(msg.id);
   if (msg._meta && msg._meta.type === 'read-receipt') return;
 
+  // Deduplicate multicast copies (same message sent to multiple recipients)
+  if (msg._meta && msg._meta.recipients && msg._meta.recipients.length > 1 && msg.threadId) {
+    var mcastKey = msg.threadId + '|' + msg.from + '|' + (msg.replyTo || '') + '|' + msg.body.slice(0, 200);
+    if (seenMulticastKeys.has(mcastKey)) return;
+    seenMulticastKeys.add(mcastKey);
+  }
+
   var empty = chat.querySelector('.empty-state');
   if (empty) empty.remove();
 
   var div = document.createElement('div');
-  div.className = 'message inbox remote' + (msg.read ? '' : ' unread');
+  div.className = 'message inbox' + (msg.read ? '' : ' unread');
   div.dataset.inboxId = msg.id;
   div.dataset.timestamp = msg.timestamp;
   applySenderStyle(div, msg.from);
@@ -835,10 +744,16 @@ function addInboxMessage(msg, serverUrl) {
     var recipientSpan = document.createElement('span');
     recipientSpan.className = 'recipient';
     recipientSpan.appendChild(document.createTextNode(' \u2192 '));
-    var addrSpan = document.createElement('span');
-    addrSpan.className = 'addr';
-    addrSpan.textContent = msg.to;
-    recipientSpan.appendChild(addrSpan);
+    var addrs = (msg._meta && msg._meta.recipients && msg._meta.recipients.length > 1)
+      ? msg._meta.recipients.filter(function(a) { return a !== msg.from; })
+      : [msg.to];
+    addrs.forEach(function(addr, i) {
+      if (i > 0) recipientSpan.appendChild(document.createTextNode(', '));
+      var addrSpan = document.createElement('span');
+      addrSpan.className = 'addr';
+      addrSpan.textContent = addr;
+      recipientSpan.appendChild(addrSpan);
+    });
     meta.appendChild(recipientSpan);
   }
   var inboxBadge = document.createElement('span');
@@ -981,19 +896,42 @@ async function deleteInboxMessage(id, serverUrl, el) {
   }
 }
 
-async function deleteLogMessage(id, el) {
-  var results = await Promise.allSettled(HOSTS.map(function(h) {
-    return fetch(h.url + '/api/log/delete', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ids: [id] }),
-    });
-  }));
-  var anyOk = results.some(function(r) { return r.status === 'fulfilled' && r.value.ok; });
-  if (anyOk) {
-    el.remove();
+// Populate address select from all host registries
+async function loadAddresses() {
+  var select = document.getElementById('addr-select');
+  var options = [];
+  for (var i = 0; i < HOSTS.length; i++) {
+    try {
+      var res = await fetch(HOSTS[i].url + '/api/registry');
+      if (res.ok) {
+        var data = await res.json();
+        (data.instances || []).forEach(function(inst) {
+          options.push(inst.address || (HOSTS[i].identity + '/' + inst.instance));
+        });
+      }
+    } catch (e) {}
+    // Also add bare host as a fallback address
+    options.push(HOSTS[i].identity);
+  }
+  // Deduplicate
+  var unique = [];
+  var seen = {};
+  options.forEach(function(addr) {
+    if (!seen[addr]) { seen[addr] = true; unique.push(addr); }
+  });
+  while (select.firstChild) select.removeChild(select.firstChild);
+  if (unique.length === 0) {
+    var opt = document.createElement('option');
+    opt.value = '';
+    opt.textContent = '(no addresses)';
+    select.appendChild(opt);
   } else {
-    console.error('Delete log message failed on all servers');
+    unique.forEach(function(addr) {
+      var opt = document.createElement('option');
+      opt.value = addr;
+      opt.textContent = addr;
+      select.appendChild(opt);
+    });
   }
 }
 
@@ -1002,9 +940,7 @@ async function deleteLogMessage(id, el) {
   for (var i = 0; i < HOSTS.length; i++) {
     await checkHealth(HOSTS[i], i);
   }
-  for (var i = 0; i < HOSTS.length; i++) {
-    await loadHistory(HOSTS[i]);
-  }
+  await loadAddresses();
   await refreshInbox();
   inboxInitialLoadDone = true;
   scrollToBottom(true);
@@ -1028,9 +964,6 @@ export function createWebServer(options: WebServerOptions = {}) {
   const config = loadConfig();
   const port = options.port ?? 3180;
   const host = options.host ?? '0.0.0.0';
-  initLog();
-  const client = new ICCClient();
-
   const handler = async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
     const { method } = req;
     const url = req.url || '/';
@@ -1056,23 +989,89 @@ export function createWebServer(options: WebServerOptions = {}) {
 
     if (method === 'POST' && url === '/send') {
       try {
-        const body = await readBody(req);
-        const { prompt, transport, peer } = JSON.parse(body);
-        if (!prompt) {
+        const rawBody = await readBody(req);
+        const { body: msgBody, to } = JSON.parse(rawBody);
+        if (!msgBody) {
           res.writeHead(400, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ error: 'Missing prompt' }));
+          res.end(JSON.stringify({ error: 'Missing body' }));
+          return;
+        }
+        if (!to) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Missing to address' }));
           return;
         }
 
-        log.info(`Web UI sending prompt (${prompt.length} chars)${peer ? ` to peer "${peer}"` : ''}`);
-        const response = await client.send(prompt, { transport, peer });
+        log.info(`Web UI sending inbox message to "${to}"`);
+        const from = getFullAddress(config);
+        const { host } = (await import('./address.ts')).parseAddress(to);
+        const peerIdentity = host && host !== config.identity ? host : null;
 
-        // Push request and response to local ICC server so SSE picks them up
-        if (response._request) pushToLocalServer(config, response._request);
-        pushToLocalServer(config, response);
-
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ ok: true, response }));
+        // Route to the right host's /api/inbox
+        if (peerIdentity) {
+          proxyRequest(config, peerIdentity, '/api/inbox', Object.assign(req, {
+            // We can't re-pipe, so make a fresh request
+          }) as IncomingMessage, res);
+          // Actually, use direct proxy POST instead
+          const target = resolveProxyTarget(config, peerIdentity);
+          if (!target) {
+            res.writeHead(404, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: `Unknown peer: ${peerIdentity}` }));
+            return;
+          }
+          const payload = JSON.stringify({ from, body: msgBody, to });
+          const targetUrl = new URL('/api/inbox', target.baseUrl);
+          const proxyRes = await new Promise<{ status: number; data: string }>((resolve, reject) => {
+            const proxyReq = target.requestFn(targetUrl, {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                'Content-Length': String(Buffer.byteLength(payload)),
+                'Authorization': `Bearer ${target.token}`,
+              },
+              ...target.requestOpts,
+            }, (r) => {
+              let data = '';
+              r.on('data', (chunk: Buffer) => { data += chunk; });
+              r.on('end', () => resolve({ status: r.statusCode || 500, data }));
+            });
+            proxyReq.on('error', reject);
+            proxyReq.write(payload);
+            proxyReq.end();
+          });
+          res.writeHead(proxyRes.status, { 'Content-Type': 'application/json' });
+          res.end(proxyRes.data);
+        } else {
+          // Local — proxy to local ICC server
+          const target = resolveProxyTarget(config, config.identity);
+          if (!target) {
+            res.writeHead(500, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Cannot resolve local server' }));
+            return;
+          }
+          const payload = JSON.stringify({ from, body: msgBody, to });
+          const targetUrl = new URL('/api/inbox', target.baseUrl);
+          const proxyRes = await new Promise<{ status: number; data: string }>((resolve, reject) => {
+            const proxyReq = target.requestFn(targetUrl, {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                'Content-Length': String(Buffer.byteLength(payload)),
+                'Authorization': `Bearer ${target.token}`,
+              },
+              ...target.requestOpts,
+            }, (r) => {
+              let data = '';
+              r.on('data', (chunk: Buffer) => { data += chunk; });
+              r.on('end', () => resolve({ status: r.statusCode || 500, data }));
+            });
+            proxyReq.on('error', reject);
+            proxyReq.write(payload);
+            proxyReq.end();
+          });
+          res.writeHead(proxyRes.status, { 'Content-Type': 'application/json' });
+          res.end(proxyRes.data);
+        }
       } catch (err) {
         log.error(`Web UI send failed: ${(err as Error).message}`);
         res.writeHead(500, { 'Content-Type': 'application/json' });

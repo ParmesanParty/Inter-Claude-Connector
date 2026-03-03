@@ -8,8 +8,6 @@ provides the communication layer.
 
 ICC lets Claude Code sessions on different machines talk to each other:
 
-- **Synchronous prompts** — invoke `claude -p` on a remote host and get
-  the response back
 - **Asynchronous inbox** — persistent messages with threading, multicast,
   and read receipts
 - **Remote operations** — read files and run commands on peer hosts (opt-in)
@@ -17,7 +15,7 @@ ICC lets Claude Code sessions on different machines talk to each other:
   across the mesh
 
 Communication happens over HTTPS with mutual TLS. Claude Code integrates via
-[MCP](https://modelcontextprotocol.io/) (10 tools) and lifecycle hooks.
+[MCP](https://modelcontextprotocol.io/) (8 tools) and lifecycle hooks.
 
 ## Architecture
 
@@ -88,7 +86,7 @@ systemctl --user start icc-server
 icc serve    [--port N] [--host H]     Start the API server
 icc web      [--port N] [--host H]     Start the web UI (port 3180)
 icc mcp                                Start MCP server on stdio
-icc send     <prompt> [--peer P]       Send a synchronous prompt to a peer
+icc send     --to <addr> <message>      Send an inbox message
 icc status   [--peer P]               Check connectivity and latency
 icc init     [--identity I] [--peer P] Initialize config or generate peer tokens
 icc config   [--set key=value]         Show or edit configuration
@@ -100,11 +98,10 @@ icc help                               Show usage
 
 ## MCP Tools
 
-ICC exposes 10 tools to Claude Code via MCP:
+ICC exposes 8 tools to Claude Code via MCP:
 
 | Tool | Type | Description |
 |------|------|-------------|
-| `send_prompt` | sync | Invoke `claude -p` on a remote host |
 | `ping_remote` | sync | Check connectivity and latency |
 | `send_message` | async | Send inbox message (supports multicast) |
 | `check_messages` | async | Read inbox (marks unread as read) |
@@ -113,7 +110,6 @@ ICC exposes 10 tools to Claude Code via MCP:
 | `list_instances` | discovery | Find active sessions across all hosts |
 | `read_remote_file` | remote op | Read a file on a peer host |
 | `run_remote_command` | remote op | Execute a command on a peer host |
-| `get_message_log` | log | Retrieve raw protocol log |
 
 ## API
 
@@ -124,8 +120,8 @@ documentation with examples:
 curl http://localhost:3179/api/help
 ```
 
-Key endpoints: `/api/message`, `/api/inbox`, `/api/registry`,
-`/api/events` (SSE), `/api/readfile`, `/api/exec`.
+Key endpoints: `/api/inbox`, `/api/registry`, `/api/events` (SSE),
+`/api/readfile`, `/api/exec`.
 
 ## Web UI
 
@@ -135,8 +131,9 @@ A browser-based dashboard for monitoring the mesh:
 icc web
 ```
 
-Features: real-time message stream via SSE, multi-host peer selector,
-instance registry view, message threading, and markdown rendering.
+Features: real-time inbox via SSE, inbox message composer, multi-host
+peer selector, instance registry view, message threading, and markdown
+rendering.
 
 ## Security
 
@@ -201,9 +198,7 @@ src/
   config.ts           Config loader with deep merge
   tls.ts              Certificate operations
   enroll.ts           HTTP-01 enrollment server
-  claude.ts           claude -p wrapper
   instances.ts        Persistent instance names
-  log.ts              Message logger (ring buffer + file)
   notify.ts           Desktop notifications
   util/
     logger.ts         Logger (writes to stderr)

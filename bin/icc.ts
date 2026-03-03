@@ -135,39 +135,85 @@ async function mcp() {
 }
 
 async function send() {
-  const { init: initLog } = await import('../src/log.ts');
-  initLog();
+  const to = flags.to as string | undefined;
+  const body = (flags.message as string) || positional[0];
 
-  const prompt = (flags.message as string) || positional[0];
-  if (!prompt) {
-    console.error('Usage: icc send "your prompt here"');
-    console.error('       icc send --message "your prompt here"');
+  if (!to || !body) {
+    console.error('Usage: icc send --to <address> "message body"');
+    console.error('       icc send --to <address> --message "body"');
     process.exit(1);
   }
 
-  const { ICCClient } = await import('../src/client.ts');
-  const client = new ICCClient();
+  const { loadConfig, getFullAddress, getTlsOptions, createIdentityVerifier } = await import('../src/config.ts');
+  const { parseAddress } = await import('../src/address.ts');
+  const config = loadConfig();
+  const from = getFullAddress(config);
+  const { host } = parseAddress(to);
+
+  // Determine which host to send to
+  const isLocal = !host || host === config.identity;
+  const tlsOpts = getTlsOptions(config);
+
+  let baseUrl: string;
+  let token: string;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let requestFn: any;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let requestOpts: any = {};
+
+  if (isLocal) {
+    const protocol = tlsOpts ? 'https' : 'http';
+    baseUrl = `${protocol}://127.0.0.1:${config.server.port}`;
+    token = config.server.localToken || config.server.authToken || '';
+    requestFn = tlsOpts ? (await import('node:https')).request : request;
+    if (tlsOpts) requestOpts = { ...tlsOpts, checkServerIdentity: createIdentityVerifier(config.identity) };
+  } else {
+    const peer = config.remotes?.[host!];
+    if (!peer?.httpUrl) {
+      console.error(`No HTTP URL configured for peer "${host}"`);
+      process.exit(1);
+    }
+    baseUrl = peer.httpUrl;
+    token = peer.token || config.server.authToken || '';
+    const isHttps = baseUrl.startsWith('https://');
+    requestFn = isHttps ? (await import('node:https')).request : request;
+    if (isHttps && tlsOpts) requestOpts = { ...tlsOpts, checkServerIdentity: createIdentityVerifier(host!) };
+  }
+
+  const payload = JSON.stringify({ from, body, to });
+  const url = new URL('/api/inbox', baseUrl);
 
   try {
-    const response = await client.send(prompt, {
-      peer: flags.peer as string | undefined,
-    });
-
-    if (flags.raw) {
-      console.log(JSON.stringify(response, null, 2));
-    } else {
-      const result = 'result' in response.payload ? response.payload.result : undefined;
-      // claude -p --output-format json returns { type, result, ... }
+    const result = await new Promise<string>((resolve, reject) => {
+      const req = requestFn(url, {
+        method: 'POST',
+        timeout: 10000,
+        headers: {
+          'Content-Type': 'application/json',
+          'Content-Length': String(Buffer.byteLength(payload)),
+          ...(token && { 'Authorization': `Bearer ${token}` }),
+        },
+        ...requestOpts,
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      if (typeof result === 'object' && result !== null && (result as any).result) {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        console.log((result as any).result);
-      } else if (typeof result === 'string') {
-        console.log(result);
-      } else {
-        console.log(JSON.stringify(result, null, 2));
-      }
-    }
+      }, (res: any) => {
+        let data = '';
+        res.on('data', (chunk: Buffer) => { data += chunk; });
+        res.on('end', () => {
+          if ((res.statusCode || 0) >= 400) {
+            try { reject(new Error(JSON.parse(data).error || `HTTP ${res.statusCode}`)); }
+            catch { reject(new Error(`HTTP ${res.statusCode}: ${data}`)); }
+          } else {
+            resolve(data);
+          }
+        });
+      });
+      req.on('error', (err: Error) => reject(new Error(`Connection failed: ${err.message}`)));
+      req.on('timeout', () => { req.destroy(); reject(new Error('Request timed out')); });
+      req.write(payload);
+      req.end();
+    });
+    const parsed = JSON.parse(result);
+    console.log(`Message sent to ${to} (id: ${parsed.id})`);
   } catch (err) {
     console.error(`Error: ${(err as Error).message}`);
     process.exit(1);
@@ -622,7 +668,7 @@ async function hook() {
           const out = JSON.stringify({
             hookSpecificOutput: {
               hookEventName: 'PreToolUse',
-              additionalContext: `REMINDER: "${sshTarget}" is an ICC peer. Prefer ICC tools (send_prompt, send_message, run_remote_command, read_remote_file) over direct SSH. Only use SSH if ICC is down or the task truly requires it.`,
+              additionalContext: `REMINDER: "${sshTarget}" is an ICC peer. Prefer ICC tools (send_message, run_remote_command, read_remote_file) over direct SSH. Only use SSH if ICC is down or the task truly requires it.`,
             },
           });
           process.stdout.write(out);
@@ -858,7 +904,7 @@ Commands:
   serve [--port N] [--host H]              Start the ICC API server
   web [--port N]                            Start the web UI (default: port 3180)
   mcp                                       Start MCP server on stdio (for Claude Code)
-  send <prompt> [--peer P]                  Send a prompt to a peer instance
+  send --to <addr> <message> [--message M]   Send an inbox message to an address
   status                                    Check connectivity to all peers
   init [--identity I] [--peer P] [--force] Initialize config, tokens, per-peer auth
   config [--set key=value]                 Show or edit configuration
@@ -877,8 +923,8 @@ Examples:
   icc init --peer laptop --force               # regenerate peer token
   icc serve                                  # start API server
   icc web                                    # start web UI at :3180
-  icc send "What files are in ~/project?"    # auto-selects sole peer
-  icc send --peer laptop "hello from desktop"    # target specific peer
+  icc send --to laptop/icc "hello from desktop"  # send inbox message
+  icc send --to laptop "broadcast message"       # send to host
   icc status                                 # per-peer connectivity
   icc tls init                             # generate CA (CA host only)
   icc tls serve                            # start enrollment server on :4179

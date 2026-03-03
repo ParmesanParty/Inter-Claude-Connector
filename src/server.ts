@@ -7,12 +7,10 @@ import { homedir } from 'node:os';
 import { timingSafeEqual } from 'node:crypto';
 import { loadConfig, getFullAddress, getOutboundToken, getTlsOptions } from './config.ts';
 import { buildAddress, parseAddress } from './address.ts';
-import { validate, createResponse, createError, createPong, serialize } from './protocol.ts';
-import { invokeClaudeCLI } from './claude.ts';
+import { validate, createPong, serialize } from './protocol.ts';
 import { createLogger } from './util/logger.ts';
 import { readBody, sendJSON as baseSendJSON } from './util/http.ts';
-import { init as initLog, record, getAll, remove as logRemove, subscribe } from './log.ts';
-import { init as initInbox, push as inboxPush, getUnread, getAll as inboxGetAll, getById as inboxGetById, markRead, markAllRead, remove as inboxRemove, purgeStale, setNotifier, setReceiptSender, isReceipt } from './inbox.ts';
+import { init as initInbox, push as inboxPush, getUnread, getAll as inboxGetAll, getById as inboxGetById, markRead, markAllRead, remove as inboxRemove, purgeStale, setNotifier, setReceiptSender, isReceipt, subscribe as inboxSubscribe } from './inbox.ts';
 import { safeReadFile, safeExec } from './util/exec.ts';
 import { register as registryRegister, list as registryList, deregister as registryDeregister } from './registry.ts';
 import { listAll as instancesListAll } from './instances.ts';
@@ -110,30 +108,8 @@ async function handleMessage(message: Message): Promise<Message> {
     return createPong(message.id);
   }
 
-  if (message.type === 'request') {
-    // Log the incoming request
-    record(message);
-
-    const prompt = 'prompt' in message.payload ? (message.payload.prompt as string) : undefined;
-    if (!prompt) {
-      return createError(message.id, 'Missing prompt in request');
-    }
-
-    try {
-      log.info(`Processing request ${message.id} from ${message.from}`);
-      const result = await invokeClaudeCLI(prompt);
-      const response = createResponse(message.id, result);
-      record(response);
-      return response;
-    } catch (err) {
-      log.error(`Claude invocation failed: ${(err as Error).message}`);
-      const errMsg = createError(message.id, (err as Error).message);
-      record(errMsg);
-      return errMsg;
-    }
-  }
-
-  return createError(message.id, `Unsupported message type: ${message.type}`);
+  // Only ping is handled; other types rejected by validate() or here
+  return createPong(message.id); // fallback — shouldn't reach here
 }
 
 
@@ -202,8 +178,7 @@ export function createICCServer(options: ICCServerOptions = {}): ICCServer {
   const startTime = Date.now();
   const sseConnections = new Set<ServerResponse>();
 
-  // Initialize message log, inbox, desktop notifications, and read receipts
-  initLog();
+  // Initialize inbox, desktop notifications, and read receipts
   initInbox();
   setNotifier(createDesktopNotifier(config));
   setReceiptSender(createReceiptSender(config));
@@ -227,7 +202,7 @@ export function createICCServer(options: ICCServerOptions = {}): ICCServer {
         name: 'Inter-Claude Connector (ICC)',
         version: '1',
         identity: config.identity,
-        description: 'Bidirectional communication between Claude Code instances. Send prompts to a remote Claude and receive responses.',
+        description: 'Messaging and collaboration for Claude Code instances across hosts.',
         endpoints: {
           'GET /api/help': {
             auth: false,
@@ -261,35 +236,19 @@ export function createICCServer(options: ICCServerOptions = {}): ICCServer {
           },
           'POST /api/message': {
             auth: true,
-            description: 'Send an ICC protocol message. The server validates the message, and if it is a request, invokes Claude CLI with the prompt and returns the response.',
-            body: '{ version: "1", id: "<uuid>", type: "request"|"ping", from: "<identity>", timestamp: "<iso8601>", payload: { prompt: "<text>", context?: {} } }',
-            response: '{ version, id, type: "response"|"pong"|"error", from, timestamp, replyTo, payload: { result } }',
+            description: 'Send an ICC protocol message (ping only). Returns a pong.',
+            body: '{ version: "1", id: "<uuid>", type: "ping", from: "<identity>", timestamp: "<iso8601>", payload: {} }',
+            response: '{ version, id, type: "pong", from, timestamp, replyTo, payload: {} }',
           },
           'POST /api/ping': {
             auth: true,
             description: 'Quick connectivity check. Returns a pong message.',
             response: '{ type: "pong", ... }',
           },
-          'POST /api/record': {
-            auth: true,
-            description: 'Push a message into the server log and SSE stream without processing it. Used by the web UI to record outgoing messages.',
-            body: '<any JSON object>',
-          },
-          'GET /api/log': {
-            auth: true,
-            description: 'Retrieve message history (in-memory ring buffer, up to 1000 messages).',
-            response: '[...messages]',
-          },
-          'POST /api/log/delete': {
-            auth: true,
-            description: 'Delete protocol messages by ID.',
-            body: '{ ids: ["<id>", ...] }',
-            response: '{ ok: true, deleted: <count> }',
-          },
           'GET /api/events': {
             auth: true,
-            description: 'SSE stream of real-time message events. Supports ?token= query param for auth since EventSource cannot set headers.',
-            response: 'text/event-stream — each event is a JSON message object',
+            description: 'SSE stream of real-time inbox message events. Supports ?token= query param for auth since EventSource cannot set headers.',
+            response: 'text/event-stream — each event is a JSON inbox message object',
           },
           'POST /api/inbox': {
             auth: true,
@@ -321,23 +280,19 @@ export function createICCServer(options: ICCServerOptions = {}): ICCServer {
           },
         },
         protocol: {
-          messageTypes: ['request', 'response', 'error', 'ping', 'pong'],
+          messageTypes: ['error', 'ping', 'pong'],
           version: '1',
           fields: {
             version: 'Protocol version (always "1")',
             id: 'UUID v4 message identifier',
-            type: 'One of: request, response, error, ping, pong',
+            type: 'One of: error, ping, pong',
             from: 'Identity of the sender (e.g. "mars", "jupiter")',
             timestamp: 'ISO 8601 timestamp',
-            payload: 'Type-specific data — request: { prompt, context? }, response: { result }, error: { error }',
-            replyTo: '(response/error/pong only) ID of the message being replied to',
+            payload: 'Type-specific data — error: { error }',
+            replyTo: '(error/pong only) ID of the message being replied to',
           },
         },
         examples: {
-          sendRequest: {
-            description: 'Send a prompt to the remote Claude',
-            curl: `curl -X POST http://localhost:${port}/api/message -H "Content-Type: application/json" -H "Authorization: Bearer <token>" -d '{"version":"1","id":"<uuid>","type":"request","from":"<identity>","timestamp":"<iso8601>","payload":{"prompt":"Hello, what is 2+2?"}}'`,
-          },
           ping: {
             description: 'Check connectivity',
             curl: `curl -X POST http://localhost:${port}/api/ping -H "Authorization: Bearer <token>"`,
@@ -345,6 +300,10 @@ export function createICCServer(options: ICCServerOptions = {}): ICCServer {
           health: {
             description: 'Check server status (no auth needed)',
             curl: `curl http://localhost:${port}/api/health`,
+          },
+          sendInboxMessage: {
+            description: 'Send an inbox message',
+            curl: `curl -X POST http://localhost:${port}/api/inbox -H "Content-Type: application/json" -H "Authorization: Bearer <token>" -d '{"from":"<identity>","body":"Hello!","to":"<host/instance>"}'`,
           },
         },
       });
@@ -433,30 +392,7 @@ export function createICCServer(options: ICCServerOptions = {}): ICCServer {
       return;
     }
 
-    // Message log — return history
-    if (method === 'GET' && url === '/api/log') {
-      sendJSON(res, 200, getAll());
-      return;
-    }
-
-    // Message log — delete by IDs
-    if (method === 'POST' && url === '/api/log/delete') {
-      try {
-        const body = await readBody(req);
-        const { ids } = JSON.parse(body);
-        if (!ids || !Array.isArray(ids)) {
-          sendJSON(res, 400, { error: 'Missing required field: ids (array)' });
-          return;
-        }
-        const deleted = logRemove(ids);
-        sendJSON(res, 200, { ok: true, deleted });
-      } catch (err) {
-        sendJSON(res, 400, { error: (err as Error).message });
-      }
-      return;
-    }
-
-    // SSE stream — real-time message updates
+    // SSE stream — real-time inbox message updates
     if (method === 'GET' && url === '/api/events') {
       res.writeHead(200, {
         'Content-Type': 'text/event-stream',
@@ -467,7 +403,7 @@ export function createICCServer(options: ICCServerOptions = {}): ICCServer {
       res.write(':\n\n'); // SSE comment to establish connection
 
       sseConnections.add(res);
-      const unsubscribe = subscribe((message) => {
+      const unsubscribe = inboxSubscribe((message) => {
         res.write(`data: ${JSON.stringify(message)}\n\n`);
       });
 
@@ -475,23 +411,6 @@ export function createICCServer(options: ICCServerOptions = {}): ICCServer {
         sseConnections.delete(res);
         unsubscribe();
       });
-      return;
-    }
-
-    // Record endpoint — external processes push messages into the server's log
-    if (method === 'POST' && url === '/api/record') {
-      try {
-        const body = await readBody(req);
-        const message = JSON.parse(body);
-        if (!validate(message)) {
-          sendJSON(res, 400, { error: 'Invalid message format' });
-          return;
-        }
-        record(message);
-        sendJSON(res, 200, { ok: true });
-      } catch (err) {
-        sendJSON(res, 400, { error: (err as Error).message });
-      }
       return;
     }
 

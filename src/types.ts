@@ -7,22 +7,13 @@
 
 // ── Protocol ────────────────────────────────────────────────────────
 
-export type MessageType = 'request' | 'response' | 'error' | 'ping' | 'pong';
-
-export interface RequestPayload {
-  prompt: string;
-  context?: Record<string, unknown>;
-}
-
-export interface ResponsePayload {
-  result: unknown;
-}
+export type MessageType = 'error' | 'ping' | 'pong';
 
 export interface ErrorPayload {
   error: string;
 }
 
-export type MessagePayload = RequestPayload | ResponsePayload | ErrorPayload | Record<string, unknown>;
+export type MessagePayload = ErrorPayload | Record<string, unknown>;
 
 export interface Message {
   version: string;

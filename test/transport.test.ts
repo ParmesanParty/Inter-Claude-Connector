@@ -23,11 +23,11 @@ describe('TransportManager', () => {
 
   it('send throws when HTTP fails', async () => {
     clearConfigCache();
-    const { createRequest } = await import('../src/protocol.ts');
+    const { createPing } = await import('../src/protocol.ts');
 
     const { TransportManager } = await import('../src/transport/index.ts');
     const tm = new TransportManager();
-    const msg = createRequest('test');
+    const msg = createPing();
 
     await assert.rejects(
       () => tm.send(msg),

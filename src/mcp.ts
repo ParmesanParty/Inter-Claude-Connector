@@ -5,7 +5,6 @@ import { randomUUID } from 'node:crypto';
 import { request as httpRequest } from 'node:http';
 import { request as httpsRequest } from 'node:https';
 import { ICCClient } from './client.ts';
-import { init as initLog, getAll } from './log.ts';
 import { loadConfig, getFullAddress, getPeerIdentities, getTlsOptions, createIdentityVerifier } from './config.ts';
 import { parseAddress } from './address.ts';
 import { createLogger } from './util/logger.ts';
@@ -30,11 +29,6 @@ interface InboxAPIMessage {
   threadId?: string | null;
   read: boolean;
   _meta?: { type?: string; originalId?: string; readAt?: string; recipients?: string[] } | null;
-}
-
-interface ClaudeJSONOutput {
-  type?: string;
-  result?: string;
 }
 
 interface RegistryInstance {
@@ -170,27 +164,6 @@ function resolvePeer(config: ICCConfig, options: { peer?: string; to?: string } 
  */
 export function createToolHandlers(client: ICCClient, peerAPIFn: PeerAPIFunction = peerAPI, localAPIFn: APIFunction = localAPI) {
   return {
-    async sendPrompt({ prompt, context, peer }: { prompt: string; context?: string; peer?: string }): Promise<MCPToolResult> {
-      try {
-        log.info(`send_prompt: "${prompt.slice(0, 80)}..."`);
-        const response = await client.send(prompt, {
-          context: context ? { text: context } : {},
-          peer,
-        });
-        const result = 'result' in response.payload ? response.payload.result : undefined;
-        // claude -p --output-format json returns { type, result, ... }
-        const nestedResult = typeof result === 'object' && result !== null
-          ? (result as ClaudeJSONOutput).result
-          : undefined;
-        const text = nestedResult
-          ?? (typeof result === 'string' ? result : JSON.stringify(result, null, 2));
-        return { content: [{ type: 'text', text }] };
-      } catch (err) {
-        log.error(`send_prompt failed: ${(err as Error).message}`);
-        return { content: [{ type: 'text', text: `Error: ${(err as Error).message}` }], isError: true };
-      }
-    },
-
     async pingRemote({ peer }: { peer?: string } = {}): Promise<MCPToolResult> {
       try {
         const result = await client.ping({ peer });
@@ -199,24 +172,6 @@ export function createToolHandlers(client: ICCClient, peerAPIFn: PeerAPIFunction
       } catch (err) {
         return { content: [{ type: 'text', text: `Ping failed: ${(err as Error).message}` }], isError: true };
       }
-    },
-
-    async getMessageLog({ limit }: { limit?: number } = {}): Promise<MCPToolResult> {
-      const max = limit ?? 20;
-      const all = getAll();
-      const recent = all.slice(-max);
-      const text = recent.length === 0
-        ? 'No messages in log.'
-        : recent.map(m => {
-            const dir = m.type === 'request' ? '→' : '←';
-            const p = m.payload as Record<string, unknown>;
-            const preview = (p.prompt as string)?.slice(0, 80)
-              || ((p.result as Record<string, unknown>)?.result as string)?.slice?.(0, 80)
-              || (p.error as string)?.slice?.(0, 80)
-              || JSON.stringify(p).slice(0, 80);
-            return `[${m.timestamp}] ${dir} ${m.type} (${m.from}) ${preview}`;
-          }).join('\n');
-      return { content: [{ type: 'text', text }] };
     },
 
     // --- Direct remote operations ---
@@ -617,12 +572,11 @@ export function createMCPServer() {
         'ICC (Inter-Claude Connector) enables communication between Claude Code instances on multiple hosts.',
         '',
         'Tool categories:',
-        '- Synchronous: send_prompt (invoke remote Claude via `claude -p`, wait for response — may take seconds to minutes)',
         '- Asynchronous: send_message, check_messages, respond_to_message, delete_messages (inbox-based persistent messaging)',
         '- Remote ops: read_remote_file, run_remote_command (require security features enabled on remote host)',
-        '- Discovery: list_instances, ping_remote, get_message_log',
+        '- Discovery: list_instances, ping_remote',
         '',
-        'Multi-host: Use the optional "peer" parameter on send_prompt, ping_remote, read_remote_file, and run_remote_command to target a specific host.',
+        'Multi-host: Use the optional "peer" parameter on ping_remote, read_remote_file, and run_remote_command to target a specific host.',
         'For send_message/respond_to_message, routing is automatic based on the "to" address (e.g. "laptop/myapp").',
         'If only one peer is configured, it is used by default. With multiple peers, specify the target.',
         '',
@@ -643,23 +597,9 @@ export function createMCPServer() {
   );
 
   const client = new ICCClient();
-  initLog();
   const handlers = createToolHandlers(client);
 
-  // --- Proxy tools ---
-
-  server.registerTool(
-    'send_prompt',
-    {
-      description: 'Send a prompt to the remote Claude Code instance, which runs `claude -p` and returns the response. This is a synchronous call that may take seconds to minutes depending on prompt complexity. Use send_message instead for asynchronous communication that doesn\'t need an immediate response.',
-      inputSchema: z.object({
-        prompt: z.string().describe('The prompt to send to the remote Claude'),
-        context: z.string().optional().describe('Optional metadata string sent alongside the prompt to the remote Claude (e.g. background info). Not prepended to the prompt itself.'),
-        peer: z.string().optional().describe('Target peer identity (e.g. "laptop", "server"). Required if multiple peers are configured.'),
-      }),
-    },
-    (args) => handlers.sendPrompt(args)
-  );
+  // --- Connectivity tools ---
 
   server.registerTool(
     'ping_remote',
@@ -670,17 +610,6 @@ export function createMCPServer() {
       }),
     },
     (args) => handlers.pingRemote(args)
-  );
-
-  server.registerTool(
-    'get_message_log',
-    {
-      description: 'Retrieve the transport-level protocol log from the local server (request/response/ping/pong messages). This is the raw communication history, NOT the inbox — use check_messages for inbox messages. Returns entries with timestamps, direction, and message previews.',
-      inputSchema: z.object({
-        limit: z.number().int().min(1).max(100).optional().describe('Max messages to return (default: 20)'),
-      }),
-    },
-    (args) => handlers.getMessageLog(args)
   );
 
   // --- Direct remote operations ---

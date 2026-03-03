@@ -133,42 +133,42 @@ describe('Server: checkAuth resolution', () => {
 
   it('allows unauthenticated when no tokens configured', async () => {
     await withServer({}, async (port) => {
-      const res = await httpRequest(port, 'GET', '/api/log');
+      const res = await httpRequest(port, 'GET', '/api/registry');
       assert.equal(res.status, 200);
     });
   });
 
   it('authenticates with localToken', async () => {
     await withServer({ localToken: 'local-secret' }, async (port) => {
-      const res = await httpRequest(port, 'GET', '/api/log', null, 'local-secret');
+      const res = await httpRequest(port, 'GET', '/api/registry', null, 'local-secret');
       assert.equal(res.status, 200);
     });
   });
 
   it('authenticates with peerToken', async () => {
     await withServer({ peerTokens: { peerA: 'peerA-secret' } }, async (port) => {
-      const res = await httpRequest(port, 'GET', '/api/log', null, 'peerA-secret');
+      const res = await httpRequest(port, 'GET', '/api/registry', null, 'peerA-secret');
       assert.equal(res.status, 200);
     });
   });
 
   it('authenticates with legacy authToken', async () => {
     await withServer({ authToken: 'legacy-secret' }, async (port) => {
-      const res = await httpRequest(port, 'GET', '/api/log', null, 'legacy-secret');
+      const res = await httpRequest(port, 'GET', '/api/registry', null, 'legacy-secret');
       assert.equal(res.status, 200);
     });
   });
 
   it('rejects invalid token', async () => {
     await withServer({ localToken: 'correct' }, async (port) => {
-      const res = await httpRequest(port, 'GET', '/api/log', null, 'wrong-token');
+      const res = await httpRequest(port, 'GET', '/api/registry', null, 'wrong-token');
       assert.equal(res.status, 401);
     });
   });
 
   it('rejects missing token when tokens are configured', async () => {
     await withServer({ localToken: 'correct' }, async (port) => {
-      const res = await httpRequest(port, 'GET', '/api/log');
+      const res = await httpRequest(port, 'GET', '/api/registry');
       assert.equal(res.status, 401);
     });
   });
@@ -176,7 +176,7 @@ describe('Server: checkAuth resolution', () => {
   it('accepts token via query param (for SSE)', async () => {
     await withServer({ localToken: 'local-secret' }, async (port) => {
       // The events endpoint is SSE — we just check it doesn't 401
-      const res = await httpRequest(port, 'GET', '/api/log?token=local-secret');
+      const res = await httpRequest(port, 'GET', '/api/registry?token=local-secret');
       assert.equal(res.status, 200);
     });
   });

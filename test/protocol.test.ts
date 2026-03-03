@@ -1,7 +1,6 @@
 import { describe, it, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  createRequest, createResponse, createError,
   createPing, createPong,
   validate, serialize, deserialize,
 } from '../src/protocol.ts';
@@ -12,37 +11,6 @@ process.env.ICC_IDENTITY = 'test-host';
 
 beforeEach(() => {
   clearConfigCache();
-});
-
-describe('createRequest', () => {
-  it('creates a valid request message', () => {
-    const msg = createRequest('Hello remote', { key: 'value' });
-    assert.equal(msg.version, '1');
-    assert.equal(msg.type, 'request');
-    assert.equal(msg.from, 'test-host');
-    assert.equal((msg.payload as Record<string, unknown>).prompt, 'Hello remote');
-    assert.deepEqual((msg.payload as Record<string, unknown>).context, { key: 'value' });
-    assert.ok(msg.id);
-    assert.ok(msg.timestamp);
-  });
-});
-
-describe('createResponse', () => {
-  it('creates a valid response message', () => {
-    const msg = createResponse('req-123', { answer: 42 });
-    assert.equal(msg.type, 'response');
-    assert.equal(msg.replyTo, 'req-123');
-    assert.deepEqual((msg.payload as Record<string, unknown>).result, { answer: 42 });
-  });
-});
-
-describe('createError', () => {
-  it('creates a valid error message', () => {
-    const msg = createError('req-123', 'Something broke');
-    assert.equal(msg.type, 'error');
-    assert.equal(msg.replyTo, 'req-123');
-    assert.equal((msg.payload as Record<string, unknown>).error, 'Something broke');
-  });
 });
 
 describe('createPing / createPong', () => {
@@ -60,9 +28,6 @@ describe('createPing / createPong', () => {
 
 describe('validate', () => {
   it('accepts valid messages', () => {
-    assert.ok(validate(createRequest('test')));
-    assert.ok(validate(createResponse('id', 'result')));
-    assert.ok(validate(createError('id', 'err')));
     assert.ok(validate(createPing()));
     assert.ok(validate(createPong('id')));
   });
@@ -73,26 +38,14 @@ describe('validate', () => {
   });
 
   it('rejects wrong version', () => {
-    const msg = createRequest('test');
+    const msg = createPing();
     msg.version = '99';
     assert.equal(validate(msg), false);
   });
 
   it('rejects invalid type', () => {
-    const msg = createRequest('test');
+    const msg = createPing();
     (msg as unknown as Record<string, unknown>).type = 'invalid';
-    assert.equal(validate(msg), false);
-  });
-
-  it('rejects request without prompt', () => {
-    const msg = createRequest('test');
-    delete (msg.payload as Record<string, unknown>).prompt;
-    assert.equal(validate(msg), false);
-  });
-
-  it('rejects response without replyTo', () => {
-    const msg = createResponse('id', 'result');
-    delete msg.replyTo;
     assert.equal(validate(msg), false);
   });
 
@@ -105,7 +58,7 @@ describe('validate', () => {
 
 describe('serialize / deserialize', () => {
   it('round-trips a message', () => {
-    const original = createRequest('round trip test', { data: [1, 2, 3] });
+    const original = createPing();
     const json = serialize(original);
     const restored = deserialize(json);
 

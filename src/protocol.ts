@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { loadConfig, getFullAddress } from './config.ts';
 import type { Message, MessageType, MessagePayload } from './types.ts';
 
-const VALID_TYPES: readonly string[] = ['request', 'response', 'error', 'ping', 'pong'];
+const VALID_TYPES: readonly string[] = ['error', 'ping', 'pong'];
 const PROTOCOL_VERSION = '1';
 
 function makeMessage(type: MessageType, payload: MessagePayload = {}, extra: Record<string, unknown> = {}): Message {
@@ -16,18 +16,6 @@ function makeMessage(type: MessageType, payload: MessagePayload = {}, extra: Rec
     payload,
     ...extra,
   };
-}
-
-export function createRequest(prompt: string, context: Record<string, unknown> = {}): Message {
-  return makeMessage('request', { prompt, context });
-}
-
-export function createResponse(replyTo: string, result: unknown): Message {
-  return makeMessage('response', { result }, { replyTo });
-}
-
-export function createError(replyTo: string, error: string): Message {
-  return makeMessage('error', { error }, { replyTo });
 }
 
 export function createPing(): Message {
@@ -49,9 +37,6 @@ export function validate(message: unknown): message is Message {
   if (!msg.payload || typeof msg.payload !== 'object') return false;
 
   // Type-specific validation
-  const payload = msg.payload as Record<string, unknown>;
-  if (msg.type === 'request' && typeof payload.prompt !== 'string') return false;
-  if (msg.type === 'response' && typeof msg.replyTo !== 'string') return false;
   if (msg.type === 'error' && typeof msg.replyTo !== 'string') return false;
   if (msg.type === 'pong' && typeof msg.replyTo !== 'string') return false;
 

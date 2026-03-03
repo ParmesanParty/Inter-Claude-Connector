@@ -5,8 +5,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { clearConfigCache, loadConfig } from '../src/config.ts';
 import { createMCPServer, createToolHandlers } from '../src/mcp.ts';
-import { record, reset as resetLog } from '../src/log.ts';
-import { createRequest } from '../src/protocol.ts';
+import { reset as resetLog } from '../src/log.ts';
 import type { ICCClient } from '../src/client.ts';
 
 process.env.ICC_IDENTITY = 'test-host';
@@ -27,71 +26,11 @@ describe('MCP Server creation', () => {
   it('creates server with all tools registered', () => {
     const { server } = createMCPServer();
     const toolNames = Object.keys((server as any)._registeredTools);
-    assert.ok(toolNames.includes('send_prompt'));
     assert.ok(toolNames.includes('ping_remote'));
-    assert.ok(toolNames.includes('get_message_log'));
-  });
-});
-
-describe('MCP tool: send_prompt', () => {
-  it('returns formatted response from remote', async () => {
-    const mockClient = {
-      send: async () => ({
-        type: 'response',
-        payload: { result: { result: 'Hello from remote!' } },
-      }),
-    } as unknown as ICCClient;
-    const handlers = createToolHandlers(mockClient);
-    const result = await handlers.sendPrompt({ prompt: 'test prompt' });
-    assert.equal(result.content[0]!.text, 'Hello from remote!');
-    assert.ok(!result.isError);
-  });
-
-  it('handles plain string result', async () => {
-    const mockClient = {
-      send: async () => ({
-        type: 'response',
-        payload: { result: 'plain text response' },
-      }),
-    } as unknown as ICCClient;
-    const handlers = createToolHandlers(mockClient);
-    const result = await handlers.sendPrompt({ prompt: 'test' });
-    assert.equal(result.content[0]!.text, 'plain text response');
-  });
-
-  it('handles object result without nested .result', async () => {
-    const mockClient = {
-      send: async () => ({
-        type: 'response',
-        payload: { result: { data: 42 } },
-      }),
-    } as unknown as ICCClient;
-    const handlers = createToolHandlers(mockClient);
-    const result = await handlers.sendPrompt({ prompt: 'test' });
-    assert.ok(result.content[0]!.text.includes('"data": 42'));
-  });
-
-  it('returns error on failure', async () => {
-    const mockClient = {
-      send: async () => { throw new Error('Connection refused'); },
-    } as unknown as ICCClient;
-    const handlers = createToolHandlers(mockClient);
-    const result = await handlers.sendPrompt({ prompt: 'test' });
-    assert.ok(result.content[0]!.text.includes('Connection refused'));
-    assert.ok(result.isError);
-  });
-
-  it('passes peer option to client', async () => {
-    let capturedOptions: any;
-    const mockClient = {
-      send: async (_prompt: string, options: any) => {
-        capturedOptions = options;
-        return { type: 'response', payload: { result: 'ok' } };
-      },
-    } as unknown as ICCClient;
-    const handlers = createToolHandlers(mockClient);
-    await handlers.sendPrompt({ prompt: 'test', peer: 'peerA' });
-    assert.equal(capturedOptions.peer, 'peerA');
+    assert.ok(toolNames.includes('send_message'));
+    assert.ok(!toolNames.includes('send_prompt'), 'send_prompt should be removed');
+    assert.ok(!toolNames.includes('get_message_log'), 'get_message_log should be removed');
+    assert.equal(toolNames.length, 8, 'should have 8 tools');
   });
 });
 
@@ -127,38 +66,6 @@ describe('MCP tool: ping_remote', () => {
     const handlers = createToolHandlers(mockClient);
     await handlers.pingRemote({ peer: 'peerB' });
     assert.equal(capturedOptions.peer, 'peerB');
-  });
-});
-
-describe('MCP tool: get_message_log', () => {
-  it('returns "No messages" when empty', async () => {
-    const mockClient = {} as unknown as ICCClient;
-    const handlers = createToolHandlers(mockClient);
-    const result = await handlers.getMessageLog({ limit: 1 });
-    assert.ok(result.content[0]!.text);
-    assert.ok(!result.isError);
-  });
-
-  it('respects limit parameter', async () => {
-    for (let i = 0; i < 5; i++) {
-      record(createRequest(`mcp-test-prompt-${i}`));
-    }
-    const mockClient = {} as unknown as ICCClient;
-    const handlers = createToolHandlers(mockClient);
-    const result = await handlers.getMessageLog({ limit: 3 });
-    const lines = result.content[0]!.text.split('\n');
-    assert.equal(lines.length, 3);
-  });
-
-  it('defaults to limit of 20', async () => {
-    for (let i = 0; i < 25; i++) {
-      record(createRequest(`mcp-default-limit-${i}`));
-    }
-    const mockClient = {} as unknown as ICCClient;
-    const handlers = createToolHandlers(mockClient);
-    const result = await handlers.getMessageLog({});
-    const lines = result.content[0]!.text.split('\n');
-    assert.equal(lines.length, 20);
   });
 });
 
