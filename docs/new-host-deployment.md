@@ -347,8 +347,9 @@ unread messages"), you **must**:
 1. Call `check_messages` (MCP tool) to read them
 2. Briefly acknowledge the messages to the user
 3. Use `respond_to_message` if a reply is warranted
-4. Follow message conventions: prefix with `[TOPIC: x]`, suffix with
-   `[STATUS: WAITING_FOR_REPLY|FYI_ONLY|ACTION_NEEDED|RESOLVED]`
+4. Follow message conventions: prefix with `[TOPIC: x]`, and set the `status`
+   parameter on `send_message`/`respond_to_message` (preferred) or suffix with
+   `[STATUS: WAITING_FOR_REPLY|FYI_ONLY|ACTION_NEEDED|RESOLVED]` in body text
 
 # ICC Mail Watcher
 

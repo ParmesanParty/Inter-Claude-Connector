@@ -1861,3 +1861,212 @@ describe('Inbox: _meta.recipients', () => {
     assert.deepEqual(msg._meta!.recipients, ['b', 'c']);
   });
 });
+
+// --- Status field tests ---
+
+describe('Inbox: push with status', () => {
+  beforeEach(() => {
+    freshInboxDir();
+    clearConfigCache();
+    const config = loadConfig();
+    config.server.tls = { enabled: false } as TlsConfig;
+  });
+
+  it('push with status stores it on the message', () => {
+    const msg = push({ from: 'a', body: 'test', status: 'ACTION_NEEDED' });
+    assert.equal(msg.status, 'ACTION_NEEDED');
+  });
+
+  it('push without status defaults to null', () => {
+    const msg = push({ from: 'a', body: 'test' });
+    assert.equal(msg.status, null);
+  });
+
+  it('status persists to disk and reloads', () => {
+    const dir = freshInboxDir();
+    push({ from: 'a', body: 'test', status: 'WAITING_FOR_REPLY' });
+    // Re-init from disk
+    reset(dir);
+    init();
+    const msgs = getAll();
+    assert.equal(msgs.length, 1);
+    assert.equal(msgs[0]!.status, 'WAITING_FOR_REPLY');
+  });
+
+  it('old messages without status field default to null on init', () => {
+    const dir = freshInboxDir();
+    // Write a message without status field directly to disk
+    const oldMsg = JSON.stringify({
+      id: 'old-id', from: 'a', to: 'b', timestamp: new Date().toISOString(),
+      body: 'legacy', replyTo: null, threadId: null, _meta: null, read: false,
+    });
+    writeFileSync(join(dir, 'inbox.jsonl'), oldMsg + '\n');
+    reset(dir);
+    init();
+    const msgs = getAll();
+    assert.equal(msgs.length, 1);
+    assert.equal(msgs[0]!.status, null);
+  });
+});
+
+describe('Inbox: signal file with status', () => {
+  beforeEach(() => {
+    freshInboxDir();
+    clearConfigCache();
+    const config = loadConfig();
+    config.server.tls = { enabled: false } as TlsConfig;
+  });
+
+  it('signal file includes Status line when present', () => {
+    push({ from: 'a', body: 'urgent', status: 'ACTION_NEEDED' });
+    const signal = readFileSync(getSignalPath(), 'utf-8');
+    assert.ok(signal.includes('Status: ACTION_NEEDED'));
+  });
+
+  it('signal file omits Status line when null', () => {
+    push({ from: 'a', body: 'no status' });
+    const signal = readFileSync(getSignalPath(), 'utf-8');
+    assert.ok(!signal.includes('Status:'));
+  });
+});
+
+describe('Server: POST /api/inbox with status', () => {
+  beforeEach(() => {
+    freshInboxDir();
+    clearConfigCache();
+    const config = loadConfig();
+    config.server.tls = { enabled: false } as TlsConfig;
+  });
+
+  it('accepts valid status and returns it', async () => {
+    const s = createICCServer({ host: '127.0.0.1', port: 0 });
+    const { port } = await s.start();
+    try {
+      const res = await httpRequest(port, 'POST', '/api/inbox', {
+        from: 'a', body: 'hello', status: 'FYI_ONLY',
+      });
+      assert.equal(res.status, 200);
+      assert.equal(res.data.status, 'FYI_ONLY');
+    } finally {
+      await s.stop();
+    }
+  });
+
+  it('rejects invalid status value', async () => {
+    const s = createICCServer({ host: '127.0.0.1', port: 0 });
+    const { port } = await s.start();
+    try {
+      const res = await httpRequest(port, 'POST', '/api/inbox', {
+        from: 'a', body: 'hello', status: 'INVALID',
+      });
+      assert.equal(res.status, 400);
+    } finally {
+      await s.stop();
+    }
+  });
+
+  it('returns null status when not provided', async () => {
+    const s = createICCServer({ host: '127.0.0.1', port: 0 });
+    const { port } = await s.start();
+    try {
+      const res = await httpRequest(port, 'POST', '/api/inbox', {
+        from: 'a', body: 'hello',
+      });
+      assert.equal(res.status, 200);
+      assert.equal(res.data.status, null);
+    } finally {
+      await s.stop();
+    }
+  });
+});
+
+describe('MCP tool: sendMessage with status', () => {
+  beforeEach(() => {
+    clearConfigCache();
+    const config = loadConfig();
+    config.remotes = {};
+    config.server.tls = { enabled: false } as TlsConfig;
+  });
+
+  it('passes status in payload', async () => {
+    let captured: any;
+    const mockPeer = async (_peer: string, _method: string, _path: string, body: any) => {
+      captured = body;
+      return { ok: true, id: 'abc-123' };
+    };
+    const handlers = createToolHandlers({} as any, mockPeer, async () => {});
+    await handlers.sendMessage({ body: 'hello', to: 'neptune', status: 'WAITING_FOR_REPLY' });
+    assert.equal(captured.status, 'WAITING_FOR_REPLY');
+  });
+
+  it('omits status from payload when not provided', async () => {
+    let captured: any;
+    const mockPeer = async (_peer: string, _method: string, _path: string, body: any) => {
+      captured = body;
+      return { ok: true, id: 'abc-123' };
+    };
+    const handlers = createToolHandlers({} as any, mockPeer, async () => {});
+    await handlers.sendMessage({ body: 'hello', to: 'neptune' });
+    assert.equal(captured.status, undefined);
+  });
+});
+
+describe('MCP tool: checkMessages displays status', () => {
+  beforeEach(() => {
+    clearConfigCache();
+  });
+
+  it('includes status tag in formatted output', async () => {
+    const mockLocal = async (method: string, path: string, _body?: any) => {
+      if (method === 'GET') return {
+        messages: [{
+          id: 'msg-1', from: 'a', timestamp: '2025-01-01T00:00:00Z',
+          body: 'test', read: false, status: 'ACTION_NEEDED', threadId: null,
+        }],
+      };
+      return { ok: true, marked: 1 };
+    };
+    const handlers = createToolHandlers({} as any, async () => {}, mockLocal);
+    const result = await handlers.checkMessages();
+    assert.ok(result.content[0]!.text.includes('[ACTION_NEEDED]'));
+  });
+
+  it('omits status tag when null', async () => {
+    const mockLocal = async (method: string, path: string, _body?: any) => {
+      if (method === 'GET') return {
+        messages: [{
+          id: 'msg-1', from: 'a', timestamp: '2025-01-01T00:00:00Z',
+          body: 'test', read: false, status: null, threadId: null,
+        }],
+      };
+      return { ok: true, marked: 1 };
+    };
+    const handlers = createToolHandlers({} as any, async () => {}, mockLocal);
+    const result = await handlers.checkMessages();
+    assert.ok(!result.content[0]!.text.includes('[ACTION_NEEDED]'));
+    assert.ok(!result.content[0]!.text.includes('[FYI_ONLY]'));
+  });
+});
+
+describe('MCP tool: respondToMessage with status', () => {
+  beforeEach(() => {
+    clearConfigCache();
+    const config = loadConfig();
+    config.remotes = {};
+    config.server.tls = { enabled: false } as TlsConfig;
+  });
+
+  it('passes status in reply payload', async () => {
+    let captured: any;
+    const mockLocal = async (method: string, path: string, body?: any) => {
+      if (method === 'GET' && path.includes('/api/inbox/msg-1')) {
+        return { message: { id: 'msg-1', from: 'test-host/other', threadId: 'thread-1' } };
+      }
+      captured = body;
+      return { ok: true, id: 'reply-1' };
+    };
+    const handlers = createToolHandlers({} as any, async () => {}, mockLocal);
+    await handlers.respondToMessage({ messageId: 'msg-1', body: 'reply', status: 'RESOLVED' });
+    assert.equal(captured.status, 'RESOLVED');
+  });
+});

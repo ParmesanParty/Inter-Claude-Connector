@@ -27,6 +27,7 @@ interface InboxAPIMessage {
   body: string;
   replyTo?: string;
   threadId?: string | null;
+  status?: string | null;
   read: boolean;
   _meta?: { type?: string; originalId?: string; readAt?: string; recipients?: string[] } | null;
 }
@@ -210,7 +211,7 @@ export function createToolHandlers(client: ICCClient, peerAPIFn: PeerAPIFunction
 
     // --- Inbox: persistent message passing ---
 
-    async sendMessage({ body, replyTo, to }: { body: string; replyTo?: string; to?: string | string[] }): Promise<MCPToolResult> {
+    async sendMessage({ body, replyTo, to, status }: { body: string; replyTo?: string; to?: string | string[]; status?: string }): Promise<MCPToolResult> {
       try {
         const config = loadConfig();
         const fullAddress = getFullAddress(config);
@@ -250,6 +251,7 @@ export function createToolHandlers(client: ICCClient, peerAPIFn: PeerAPIFunction
           const payload: Record<string, unknown> = { from: fullAddress, body, threadId };
           if (replyTo) payload.replyTo = replyTo;
           if (singleTo) payload.to = singleTo;
+          if (status) payload.status = status;
 
           const peerIdentity = resolvePeer(config, { to: singleTo });
           const apiFn: APIFunction = peerIdentity
@@ -272,6 +274,7 @@ export function createToolHandlers(client: ICCClient, peerAPIFn: PeerAPIFunction
               _meta: meta,
             };
             if (replyTo) payload.replyTo = replyTo;
+            if (status) payload.status = status;
 
             const peerIdentity = resolvePeer(config, { to: recipient });
             const apiFn: APIFunction = peerIdentity
@@ -357,6 +360,9 @@ export function createToolHandlers(client: ICCClient, peerAPIFn: PeerAPIFunction
 
         const formatAnnotations = (m: InboxAPIMessage): string => {
           const parts: string[] = [];
+          if (m.status) {
+            parts.push(`[${m.status}]`);
+          }
           if (m._meta?.recipients && m._meta.recipients.length > 0) {
             parts.push(`(multicast to ${m._meta.recipients.length})`);
           }
@@ -389,7 +395,7 @@ export function createToolHandlers(client: ICCClient, peerAPIFn: PeerAPIFunction
       }
     },
 
-    async respondToMessage({ messageId, body, replyAll }: { messageId: string; body: string; replyAll?: boolean }): Promise<MCPToolResult> {
+    async respondToMessage({ messageId, body, replyAll, status }: { messageId: string; body: string; replyAll?: boolean; status?: string }): Promise<MCPToolResult> {
       try {
         const config = loadConfig();
         const fullAddress = getFullAddress(config);
@@ -439,6 +445,7 @@ export function createToolHandlers(client: ICCClient, peerAPIFn: PeerAPIFunction
                 threadId,
                 _meta: meta,
               };
+              if (status) payload.status = status;
 
               const peerIdentity = resolvePeer(config, { to: recipient });
               const apiFn: APIFunction = peerIdentity
@@ -474,6 +481,7 @@ export function createToolHandlers(client: ICCClient, peerAPIFn: PeerAPIFunction
         // Single reply with threadId
         const payload: Record<string, unknown> = { from: fullAddress, body, replyTo: resolvedId, threadId };
         if (to) payload.to = to;
+        if (status) payload.status = status;
         // Carry recipients metadata forward for potential future reply-all
         if (originalRecipients) {
           payload._meta = { recipients: originalRecipients };
@@ -592,6 +600,8 @@ export function createMCPServer() {
         '',
         'Important: check_messages marks retrieved messages as read. Call once and process the results.',
         'Threading: Every message gets a threadId. Replies inherit the parent\'s threadId. Use check_messages({ threadId }) to view a thread.',
+        '',
+        'Message status: send_message and respond_to_message accept an optional "status" parameter (WAITING_FOR_REPLY, FYI_ONLY, ACTION_NEEDED, RESOLVED). Prefer this over embedding [STATUS: ...] in the message body.',
       ].join('\n'),
     }
   );
@@ -651,6 +661,7 @@ export function createMCPServer() {
         body: z.string().describe('The message content'),
         replyTo: z.string().optional().describe('ID of a message to reply to (for threading)'),
         to: z.union([z.string(), z.array(z.string()).min(2)]).optional().describe('Target address(es). Single string or array for multicast (e.g. ["laptop/app", "server/app"]).'),
+        status: z.enum(['WAITING_FOR_REPLY', 'FYI_ONLY', 'ACTION_NEEDED', 'RESOLVED']).optional().describe('Message status. Use instead of [STATUS: ...] in body text. WAITING_FOR_REPLY = expecting a response, FYI_ONLY = informational, ACTION_NEEDED = recipient should act, RESOLVED = issue closed.'),
       }),
     },
     (args) => handlers.sendMessage(args)
@@ -676,6 +687,7 @@ export function createMCPServer() {
         messageId: z.string().describe('Full message ID or unique prefix (8+ characters). The sender address is looked up from the original message to route the reply.'),
         body: z.string().describe('The reply content'),
         replyAll: z.boolean().optional().describe('Reply to sender AND all other recipients in the thread. Default: sender only.'),
+        status: z.enum(['WAITING_FOR_REPLY', 'FYI_ONLY', 'ACTION_NEEDED', 'RESOLVED']).optional().describe('Message status. Use instead of [STATUS: ...] in body text.'),
       }),
     },
     (args) => handlers.respondToMessage(args)

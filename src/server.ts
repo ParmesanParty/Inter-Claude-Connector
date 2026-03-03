@@ -252,9 +252,9 @@ export function createICCServer(options: ICCServerOptions = {}): ICCServer {
           },
           'POST /api/inbox': {
             auth: true,
-            description: 'Push a message into the inbox. Server generates id, timestamp, and read:false. Optional "to" field for instance addressing (e.g. "mars/myapp"); defaults to broadcast (bare hostname). Optional "threadId" groups related messages in a conversation.',
-            body: '{ from: "<address>", to?: "<address>", body: "<message text>", replyTo?: "<message-id>", threadId?: "<uuid>", _meta?: { recipients?: ["<addr>", ...] } }',
-            response: '{ ok: true, id: "<uuid>", threadId: "<uuid>"|null }',
+            description: 'Push a message into the inbox. Server generates id, timestamp, and read:false. Optional "to" field for instance addressing (e.g. "mars/myapp"); defaults to broadcast (bare hostname). Optional "threadId" groups related messages in a conversation. Optional "status" field: WAITING_FOR_REPLY, FYI_ONLY, ACTION_NEEDED, or RESOLVED.',
+            body: '{ from: "<address>", to?: "<address>", body: "<message text>", replyTo?: "<message-id>", threadId?: "<uuid>", status?: "WAITING_FOR_REPLY"|"FYI_ONLY"|"ACTION_NEEDED"|"RESOLVED", _meta?: { recipients?: ["<addr>", ...] } }',
+            response: '{ ok: true, id: "<uuid>", threadId: "<uuid>"|null, status: "<status>"|null }',
           },
           'GET /api/inbox': {
             auth: true,
@@ -494,7 +494,7 @@ export function createICCServer(options: ICCServerOptions = {}): ICCServer {
           sendJSON(res, 400, { error: parsed.error.issues[0]?.message ?? 'Invalid request' });
           return;
         }
-        const { from, to, body: msgBody, replyTo, threadId, _meta } = parsed.data;
+        const { from, to, body: msgBody, replyTo, threadId, status, _meta } = parsed.data;
         // Validate from-field matches authenticated identity
         if (!validateFrom(auth.identity, from)) {
           sendJSON(res, 403, { error: `Authenticated as "${auth.identity}" but from "${from}" — identity mismatch` });
@@ -511,8 +511,8 @@ export function createICCServer(options: ICCServerOptions = {}): ICCServer {
           destination = to;
         }
         const silent = _meta?.type === 'read-receipt';
-        const msg = inboxPush({ from, to: destination, body: msgBody, replyTo, threadId, _meta }, { silent });
-        sendJSON(res, 200, { ok: true, id: msg.id, threadId: msg.threadId });
+        const msg = inboxPush({ from, to: destination, body: msgBody, replyTo, threadId, status, _meta }, { silent });
+        sendJSON(res, 200, { ok: true, id: msg.id, threadId: msg.threadId, status: msg.status });
       } catch (err) {
         sendJSON(res, 400, { error: (err as Error).message });
       }

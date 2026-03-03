@@ -11,6 +11,7 @@ export const inboxSchema = z.object({
   body: z.string(),
   replyTo: z.string().optional(),
   threadId: z.string().optional(),
+  status: z.enum(['WAITING_FOR_REPLY', 'FYI_ONLY', 'ACTION_NEEDED', 'RESOLVED']).optional(),
   _meta: z.object({
     type: z.string().optional(),
     originalId: z.string().optional(),

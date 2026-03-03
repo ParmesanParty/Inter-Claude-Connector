@@ -146,6 +146,11 @@ function getHTML(config: ICCConfig): string {
   .message.inbox.unread { background: var(--inbox-unread-bg); }
   .badge.inbox-badge { background: var(--inbox-accent); color: #fff; }
   .badge.unread-badge { background: var(--orange); color: #fff; }
+  .badge.status-badge { color: #fff; text-transform: none; letter-spacing: 0; }
+  .badge.status-WAITING_FOR_REPLY { background: var(--accent); }
+  .badge.status-FYI_ONLY { background: var(--muted); }
+  .badge.status-ACTION_NEEDED { background: var(--orange); }
+  .badge.status-RESOLVED { background: #2ea043; }
   .inbox-actions { display: flex; gap: 12px; margin-top: 8px; }
   .inbox-actions button { background: none; border: none; color: var(--muted); font-family: inherit; font-size: 11px; cursor: pointer; padding: 0; }
   .inbox-actions button:hover { color: var(--accent); }
@@ -765,6 +770,12 @@ function addInboxMessage(msg, serverUrl) {
     unreadBadge.className = 'badge unread-badge';
     unreadBadge.textContent = 'unread';
     meta.appendChild(unreadBadge);
+  }
+  if (msg.status) {
+    var statusBadge = document.createElement('span');
+    statusBadge.className = 'badge status-badge status-' + msg.status;
+    statusBadge.textContent = msg.status.replace(/_/g, ' ');
+    meta.appendChild(statusBadge);
   }
   var timeSpan = document.createElement('span');
   timeSpan.textContent = formatTime(msg.timestamp);

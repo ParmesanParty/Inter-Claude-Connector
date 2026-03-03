@@ -698,10 +698,11 @@ async function hook() {
       for await (const chunk of process.stdin) input += chunk;
       const { tool_input } = JSON.parse(input);
       const body: string = tool_input?.body || '';
+      const hasStatusParam = !!tool_input?.status;
 
       const missing: string[] = [];
       if (!body.includes('[TOPIC:')) missing.push('[TOPIC: x]');
-      if (!body.includes('[STATUS:')) missing.push('[STATUS: WAITING_FOR_REPLY|FYI_ONLY|ACTION_NEEDED|RESOLVED]');
+      if (!hasStatusParam && !body.includes('[STATUS:')) missing.push('the `status` parameter (preferred) or [STATUS: ...] in body');
 
       if (missing.length > 0) {
         const out = JSON.stringify({

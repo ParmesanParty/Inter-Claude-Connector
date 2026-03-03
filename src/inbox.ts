@@ -4,7 +4,7 @@ import { homedir } from 'node:os';
 import { randomUUID } from 'node:crypto';
 import { createLogger } from './util/logger.ts';
 import { parseAddress, addressMatches } from './address.ts';
-import type { InboxMessage, MessageMeta } from './types.ts';
+import type { InboxMessage, InboxMessageStatus, MessageMeta } from './types.ts';
 
 const log = createLogger('inbox');
 
@@ -30,6 +30,7 @@ export function init(): void {
       try {
         const msg = JSON.parse(line);
         msg.threadId = msg.threadId ?? null;
+        msg.status = msg.status ?? null;
         messages.push(msg);
       } catch {
         // skip malformed lines
@@ -56,6 +57,7 @@ interface InboxPushInput {
   body: string;
   replyTo?: string | null;
   threadId?: string | null;
+  status?: InboxMessageStatus | null;
   _meta?: MessageMeta | null;
 }
 
@@ -72,6 +74,7 @@ export function push(message: InboxPushInput, { silent = false }: PushOptions = 
     body: message.body,
     replyTo: message.replyTo || null,
     threadId: message.threadId ?? null,
+    status: message.status ?? null,
     _meta: message._meta || null,
     read: false,
   };
@@ -298,6 +301,9 @@ function writeSignalContent(path: string, unread: InboxMessage[]): void {
     `From: ${senders.join(', ')} | Latest: ${latest.timestamp}`,
     `Preview: ${preview}`,
   ];
+  if (latest.status) {
+    lines.push(`Status: ${latest.status}`);
+  }
   writeFileSync(path, lines.join('\n') + '\n');
 }
 

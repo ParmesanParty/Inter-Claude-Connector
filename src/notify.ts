@@ -24,9 +24,11 @@ async function getNotifier(): Promise<typeof _notifier> {
  */
 export function createDesktopNotifier(config: ICCConfig): (message: InboxMessage) => void {
   return (message: InboxMessage) => {
-    const preview = message.body.length > 100
+    const statusPrefix = message.status ? `[${message.status}] ` : '';
+    const bodyPreview = message.body.length > 100
       ? message.body.slice(0, 97) + '...'
       : message.body;
+    const preview = statusPrefix + bodyPreview;
     getNotifier().then(notifier => {
       if (!notifier) return;
       const titlePrefix = config.instance ? `ICC [${config.instance}]` : 'ICC';

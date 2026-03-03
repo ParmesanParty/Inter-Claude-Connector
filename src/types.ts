@@ -102,6 +102,8 @@ export interface RegistryEntry {
 
 // ── Inbox ───────────────────────────────────────────────────────────
 
+export type InboxMessageStatus = 'WAITING_FOR_REPLY' | 'FYI_ONLY' | 'ACTION_NEEDED' | 'RESOLVED';
+
 export interface MessageMeta {
   type?: string;
   originalId?: string;
@@ -117,6 +119,7 @@ export interface InboxMessage {
   body: string;
   replyTo: string | null;
   threadId: string | null;
+  status: InboxMessageStatus | null;
   _meta: MessageMeta | null;
   read: boolean;
 }
