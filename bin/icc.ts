@@ -614,6 +614,10 @@ async function hook() {
     }
 
     case 'watch': {
+      // Anchor cwd to $HOME so the watcher survives worktree removal.
+      // All file operations use absolute paths (~/.icc/...), so cwd is irrelevant.
+      try { process.chdir(homedir()); } catch { /* non-fatal */ }
+
       // Guard: if any watcher process is already alive, exit immediately.
       // Uses isAnyWatcherAlive() to catch cross-instance duplicates
       // (e.g. watcher launched from worktree, then cwd changes to main).
