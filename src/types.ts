@@ -42,6 +42,7 @@ export interface ServerConfig {
   peerTokens: Record<string, string>;
   tls: TlsConfig;
   enrollPort: number;
+  corsOrigins?: string[];
 }
 
 export interface TransportConfig {

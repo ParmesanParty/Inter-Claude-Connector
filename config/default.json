@@ -13,7 +13,8 @@
       "keyPath": null,
       "caPath": null
     },
-    "enrollPort": 4179
+    "enrollPort": 4179,
+    "corsOrigins": ["http://localhost:3180"]
   },
   "tls": {
     "ca": null

@@ -20,14 +20,18 @@ import type { Message, ICCConfig, AuthResult } from './types.ts';
 
 const log = createLogger('server');
 
-const CORS_SEND_HEADERS: Record<string, string> = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Methods': 'GET, POST, DELETE, OPTIONS',
-  'Access-Control-Allow-Headers': 'Content-Type, Authorization',
-};
-
-function sendJSON(res: ServerResponse, statusCode: number, data: unknown): void {
-  baseSendJSON(res, statusCode, data, CORS_SEND_HEADERS);
+function getCorsHeaders(req: IncomingMessage, config: ICCConfig): Record<string, string> {
+  const origin = req.headers.origin;
+  const allowed = config.server.corsOrigins || [];
+  const headers: Record<string, string> = {
+    'Access-Control-Allow-Methods': 'GET, POST, DELETE, OPTIONS',
+    'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+    'Vary': 'Origin',
+  };
+  if (origin && allowed.includes(origin)) {
+    headers['Access-Control-Allow-Origin'] = origin;
+  }
+  return headers;
 }
 
 /**
@@ -183,9 +187,14 @@ export function createICCServer(options: ICCServerOptions = {}): ICCServer {
     const url = (req.url || '').split('?')[0]!;
     log.debug(`${method} ${url}`);
 
+    const corsHeaders = getCorsHeaders(req, config);
+    const sendJSON = (r: ServerResponse, statusCode: number, data: unknown): void => {
+      baseSendJSON(r, statusCode, data, corsHeaders);
+    };
+
     // CORS preflight
     if (method === 'OPTIONS') {
-      res.writeHead(204, CORS_SEND_HEADERS);
+      res.writeHead(204, corsHeaders);
       res.end();
       return;
     }
@@ -322,7 +331,7 @@ export function createICCServer(options: ICCServerOptions = {}): ICCServer {
       try {
         if (existsSync(challengePath)) {
           const token = readFileSync(challengePath, 'utf-8').trim();
-          res.writeHead(200, { 'Content-Type': 'text/plain', ...CORS_SEND_HEADERS });
+          res.writeHead(200, { 'Content-Type': 'text/plain', ...corsHeaders });
           res.end(token);
         } else {
           sendJSON(res, 404, { error: 'No active challenge' });
@@ -392,7 +401,7 @@ export function createICCServer(options: ICCServerOptions = {}): ICCServer {
         'Content-Type': 'text/event-stream',
         'Cache-Control': 'no-cache',
         'Connection': 'keep-alive',
-        ...CORS_SEND_HEADERS,
+        ...corsHeaders,
       });
       res.write(':\n\n'); // SSE comment to establish connection
 
