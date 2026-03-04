@@ -40,7 +40,7 @@ describe('CORS', () => {
     config.server.peerTokens = {};
     config.server.corsOrigins = ['http://localhost:3180'];
 
-    const s = createICCServer({ host: '127.0.0.1', port: 0 });
+    const s = createICCServer({ host: '127.0.0.1', port: 0, noAuth: true });
     const info = await s.start();
     try {
       const res = await httpRequest(info.port, 'OPTIONS', '/api/health', 'http://localhost:3180');
@@ -59,7 +59,7 @@ describe('CORS', () => {
     config.server.peerTokens = {};
     config.server.corsOrigins = ['http://localhost:3180'];
 
-    const s = createICCServer({ host: '127.0.0.1', port: 0 });
+    const s = createICCServer({ host: '127.0.0.1', port: 0, noAuth: true });
     const info = await s.start();
     try {
       const res = await httpRequest(info.port, 'OPTIONS', '/api/health', 'http://evil.com');
@@ -78,7 +78,7 @@ describe('CORS', () => {
     config.server.peerTokens = {};
     config.server.corsOrigins = ['http://localhost:3180'];
 
-    const s = createICCServer({ host: '127.0.0.1', port: 0 });
+    const s = createICCServer({ host: '127.0.0.1', port: 0, noAuth: true });
     const info = await s.start();
     try {
       const res = await httpRequest(info.port, 'OPTIONS', '/api/health', 'http://localhost:3180');

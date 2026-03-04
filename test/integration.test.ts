@@ -92,7 +92,7 @@ describe('HTTP Server', () => {
     config.server.tls = { enabled: false, certPath: null, keyPath: null, caPath: null };
     config.server.localToken = null;
     config.server.peerTokens = {};
-    const s = createICCServer({ host: '127.0.0.1', port: 0 });
+    const s = createICCServer({ host: '127.0.0.1', port: 0, noAuth: true });
     const info = await s.start();
     return { server: s, port: info.port };
   }
@@ -117,7 +117,7 @@ describe('HTTP Server', () => {
     config.server.tls = { enabled: false, certPath: null, keyPath: null, caPath: null };
     config.server.localToken = 'test-auth-token';
     config.server.peerTokens = {};
-    const s = createICCServer({ host: '127.0.0.1', port: 0 });
+    const s = createICCServer({ host: '127.0.0.1', port: 0, noAuth: true });
     const { port: p } = await s.start();
     try {
       const res = await httpRequest(p, 'POST', '/api/message', {}, 'wrong-token');
@@ -213,7 +213,7 @@ describe('Zod validation', () => {
     config.server.tls = { enabled: false, certPath: null, keyPath: null, caPath: null };
     config.server.localToken = null;
     config.server.peerTokens = {};
-    const s = createICCServer({ host: '127.0.0.1', port: 0 });
+    const s = createICCServer({ host: '127.0.0.1', port: 0, noAuth: true });
     const info = await s.start();
     return { server: s, port: info.port };
   }

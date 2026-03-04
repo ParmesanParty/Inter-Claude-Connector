@@ -356,7 +356,7 @@ describe('Server: POST /api/inbox', () => {
   });
 
   it('accepts valid message and returns id', async () => {
-    const s = createICCServer({ host: '127.0.0.1', port: 0 });
+    const s = createICCServer({ host: '127.0.0.1', port: 0, noAuth: true });
     const { port } = await s.start();
     try {
       const res = await httpRequest(port, 'POST', '/api/inbox', {
@@ -371,7 +371,7 @@ describe('Server: POST /api/inbox', () => {
   });
 
   it('rejects missing from/body', async () => {
-    const s = createICCServer({ host: '127.0.0.1', port: 0 });
+    const s = createICCServer({ host: '127.0.0.1', port: 0, noAuth: true });
     const { port } = await s.start();
     try {
       const res = await httpRequest(port, 'POST', '/api/inbox', { from: 'saturn' });
@@ -388,7 +388,7 @@ describe('Server: POST /api/inbox', () => {
     config.server.tls = { enabled: false } as TlsConfig;
     config.server.localToken = 'test-auth-token';
     config.server.peerTokens = {};
-    const s = createICCServer({ host: '127.0.0.1', port: 0 });
+    const s = createICCServer({ host: '127.0.0.1', port: 0, noAuth: true });
     const { port } = await s.start();
     try {
       const res = await httpRequest(port, 'POST', '/api/inbox', { from: 'a', body: 'b' }, 'wrong');
@@ -411,7 +411,7 @@ describe('Server: GET /api/inbox', () => {
   });
 
   it('returns unread messages by default', async () => {
-    const s = createICCServer({ host: '127.0.0.1', port: 0 });
+    const s = createICCServer({ host: '127.0.0.1', port: 0, noAuth: true });
     const { port } = await s.start();
     try {
       await httpRequest(port, 'POST', '/api/inbox', { from: 'saturn', body: 'msg1' });
@@ -425,7 +425,7 @@ describe('Server: GET /api/inbox', () => {
   });
 
   it('returns all messages with ?all=true', async () => {
-    const s = createICCServer({ host: '127.0.0.1', port: 0 });
+    const s = createICCServer({ host: '127.0.0.1', port: 0, noAuth: true });
     const { port } = await s.start();
     try {
       // Push and mark as read
@@ -457,7 +457,7 @@ describe('Server: POST /api/inbox/mark-read', () => {
   });
 
   it('marks specific messages as read', async () => {
-    const s = createICCServer({ host: '127.0.0.1', port: 0 });
+    const s = createICCServer({ host: '127.0.0.1', port: 0, noAuth: true });
     const { port } = await s.start();
     try {
       const r1 = await httpRequest(port, 'POST', '/api/inbox', { from: 'a', body: 'msg1' });
@@ -473,7 +473,7 @@ describe('Server: POST /api/inbox/mark-read', () => {
   });
 
   it('marks all with all:true', async () => {
-    const s = createICCServer({ host: '127.0.0.1', port: 0 });
+    const s = createICCServer({ host: '127.0.0.1', port: 0, noAuth: true });
     const { port } = await s.start();
     try {
       await httpRequest(port, 'POST', '/api/inbox', { from: 'a', body: 'msg1' });
@@ -500,7 +500,7 @@ describe('Server: POST /api/inbox/delete', () => {
   });
 
   it('deletes messages by ID', async () => {
-    const s = createICCServer({ host: '127.0.0.1', port: 0 });
+    const s = createICCServer({ host: '127.0.0.1', port: 0, noAuth: true });
     const { port } = await s.start();
     try {
       const r1 = await httpRequest(port, 'POST', '/api/inbox', { from: 'a', body: 'msg1' });
@@ -516,7 +516,7 @@ describe('Server: POST /api/inbox/delete', () => {
   });
 
   it('rejects missing ids', async () => {
-    const s = createICCServer({ host: '127.0.0.1', port: 0 });
+    const s = createICCServer({ host: '127.0.0.1', port: 0, noAuth: true });
     const { port } = await s.start();
     try {
       const res = await httpRequest(port, 'POST', '/api/inbox/delete', {});
@@ -675,7 +675,7 @@ describe('Server: POST /api/inbox with to field', () => {
   });
 
   it('accepts message with instance-addressed to field', async () => {
-    const s = createICCServer({ host: '127.0.0.1', port: 0 });
+    const s = createICCServer({ host: '127.0.0.1', port: 0, noAuth: true });
     const { port } = await s.start();
     try {
       const res = await httpRequest(port, 'POST', '/api/inbox', {
@@ -689,7 +689,7 @@ describe('Server: POST /api/inbox with to field', () => {
   });
 
   it('rejects to field with wrong host', async () => {
-    const s = createICCServer({ host: '127.0.0.1', port: 0 });
+    const s = createICCServer({ host: '127.0.0.1', port: 0, noAuth: true });
     const { port } = await s.start();
     try {
       const res = await httpRequest(port, 'POST', '/api/inbox', {
@@ -703,7 +703,7 @@ describe('Server: POST /api/inbox with to field', () => {
   });
 
   it('defaults to broadcast when no to field', async () => {
-    const s = createICCServer({ host: '127.0.0.1', port: 0 });
+    const s = createICCServer({ host: '127.0.0.1', port: 0, noAuth: true });
     const { port } = await s.start();
     try {
       await httpRequest(port, 'POST', '/api/inbox', {
@@ -729,7 +729,7 @@ describe('Server: GET /api/inbox with ?instance=', () => {
   });
 
   it('filters by instance', async () => {
-    const s = createICCServer({ host: '127.0.0.1', port: 0 });
+    const s = createICCServer({ host: '127.0.0.1', port: 0, noAuth: true });
     const { port } = await s.start();
     try {
       await httpRequest(port, 'POST', '/api/inbox', {
@@ -752,7 +752,7 @@ describe('Server: GET /api/inbox with ?instance=', () => {
   });
 
   it('includes broadcast messages in instance filter', async () => {
-    const s = createICCServer({ host: '127.0.0.1', port: 0 });
+    const s = createICCServer({ host: '127.0.0.1', port: 0, noAuth: true });
     const { port } = await s.start();
     try {
       await httpRequest(port, 'POST', '/api/inbox', {
@@ -769,7 +769,7 @@ describe('Server: GET /api/inbox with ?instance=', () => {
   });
 
   it('without instance returns all messages', async () => {
-    const s = createICCServer({ host: '127.0.0.1', port: 0 });
+    const s = createICCServer({ host: '127.0.0.1', port: 0, noAuth: true });
     const { port } = await s.start();
     try {
       await httpRequest(port, 'POST', '/api/inbox', {
@@ -798,7 +798,7 @@ describe('Server: GET /api/inbox with ?receipts=false', () => {
   });
 
   it('excludes receipt messages from response and unreadCount', async () => {
-    const s = createICCServer({ host: '127.0.0.1', port: 0 });
+    const s = createICCServer({ host: '127.0.0.1', port: 0, noAuth: true });
     const { port } = await s.start();
     try {
       // Push a regular message and a receipt
@@ -836,7 +836,7 @@ describe('Server: GET /api/health with instance', () => {
   });
 
   it('includes instance field (null when not set)', async () => {
-    const s = createICCServer({ host: '127.0.0.1', port: 0 });
+    const s = createICCServer({ host: '127.0.0.1', port: 0, noAuth: true });
     const { port } = await s.start();
     try {
       const res = await httpRequest(port, 'GET', '/api/health', null, null);
@@ -1195,7 +1195,7 @@ describe('Server: GET /api/inbox/:id', () => {
   });
 
   it('returns message by ID', async () => {
-    const s = createICCServer({ host: '127.0.0.1', port: 0 });
+    const s = createICCServer({ host: '127.0.0.1', port: 0, noAuth: true });
     const { port } = await s.start();
     try {
       const postRes = await httpRequest(port, 'POST', '/api/inbox', {
@@ -1213,7 +1213,7 @@ describe('Server: GET /api/inbox/:id', () => {
   });
 
   it('returns 404 for nonexistent ID', async () => {
-    const s = createICCServer({ host: '127.0.0.1', port: 0 });
+    const s = createICCServer({ host: '127.0.0.1', port: 0, noAuth: true });
     const { port } = await s.start();
     try {
       const res = await httpRequest(port, 'GET', '/api/inbox/nonexistent-id');
@@ -1231,7 +1231,7 @@ describe('Server: GET /api/inbox/:id', () => {
     config.server.tls = { enabled: false } as TlsConfig;
     config.server.localToken = 'test-auth-token';
     config.server.peerTokens = {};
-    const s = createICCServer({ host: '127.0.0.1', port: 0 });
+    const s = createICCServer({ host: '127.0.0.1', port: 0, noAuth: true });
     const { port } = await s.start();
     try {
       const res = await httpRequest(port, 'GET', '/api/inbox/some-id', null, 'wrong');
@@ -1655,7 +1655,7 @@ describe('Server: POST /api/inbox with _meta', () => {
   });
 
   it('preserves _meta field', async () => {
-    const s = createICCServer({ host: '127.0.0.1', port: 0 });
+    const s = createICCServer({ host: '127.0.0.1', port: 0, noAuth: true });
     const { port } = await s.start();
     try {
       const meta = { type: 'read-receipt', originalId: 'abc', readAt: '2026-01-01T00:00:00Z' };
@@ -1671,7 +1671,7 @@ describe('Server: POST /api/inbox with _meta', () => {
   });
 
   it('allows empty body for receipts', async () => {
-    const s = createICCServer({ host: '127.0.0.1', port: 0 });
+    const s = createICCServer({ host: '127.0.0.1', port: 0, noAuth: true });
     const { port } = await s.start();
     try {
       const res = await httpRequest(port, 'POST', '/api/inbox', {
@@ -1685,7 +1685,7 @@ describe('Server: POST /api/inbox with _meta', () => {
   });
 
   it('receipt push does not create signal file', async () => {
-    const s = createICCServer({ host: '127.0.0.1', port: 0 });
+    const s = createICCServer({ host: '127.0.0.1', port: 0, noAuth: true });
     const { port } = await s.start();
     try {
       await httpRequest(port, 'POST', '/api/inbox', {
@@ -1788,7 +1788,7 @@ describe('Server: POST /api/inbox with threadId', () => {
   });
 
   it('accepts and returns threadId', async () => {
-    const s = createICCServer({ host: '127.0.0.1', port: 0 });
+    const s = createICCServer({ host: '127.0.0.1', port: 0, noAuth: true });
     const { port } = await s.start();
     try {
       const res = await httpRequest(port, 'POST', '/api/inbox', {
@@ -1803,7 +1803,7 @@ describe('Server: POST /api/inbox with threadId', () => {
   });
 
   it('returns null threadId when not provided', async () => {
-    const s = createICCServer({ host: '127.0.0.1', port: 0 });
+    const s = createICCServer({ host: '127.0.0.1', port: 0, noAuth: true });
     const { port } = await s.start();
     try {
       const res = await httpRequest(port, 'POST', '/api/inbox', {
@@ -1817,7 +1817,7 @@ describe('Server: POST /api/inbox with threadId', () => {
   });
 
   it('accepts _meta with recipients and no type', async () => {
-    const s = createICCServer({ host: '127.0.0.1', port: 0 });
+    const s = createICCServer({ host: '127.0.0.1', port: 0, noAuth: true });
     const { port } = await s.start();
     try {
       const res = await httpRequest(port, 'POST', '/api/inbox', {
@@ -1844,7 +1844,7 @@ describe('Server: GET /api/inbox with ?threadId=', () => {
   });
 
   it('filters messages by threadId', async () => {
-    const s = createICCServer({ host: '127.0.0.1', port: 0 });
+    const s = createICCServer({ host: '127.0.0.1', port: 0, noAuth: true });
     const { port } = await s.start();
     try {
       await httpRequest(port, 'POST', '/api/inbox', { from: 'a', body: 'thread-A', threadId: 'thread-A' });
@@ -1865,7 +1865,7 @@ describe('Server: GET /api/inbox with ?threadId=', () => {
   });
 
   it('returns empty when threadId matches nothing', async () => {
-    const s = createICCServer({ host: '127.0.0.1', port: 0 });
+    const s = createICCServer({ host: '127.0.0.1', port: 0, noAuth: true });
     const { port } = await s.start();
     try {
       await httpRequest(port, 'POST', '/api/inbox', { from: 'a', body: 'msg', threadId: 'thread-X' });
@@ -2050,7 +2050,7 @@ describe('Server: POST /api/inbox with status', () => {
   });
 
   it('accepts valid status and returns it', async () => {
-    const s = createICCServer({ host: '127.0.0.1', port: 0 });
+    const s = createICCServer({ host: '127.0.0.1', port: 0, noAuth: true });
     const { port } = await s.start();
     try {
       const res = await httpRequest(port, 'POST', '/api/inbox', {
@@ -2064,7 +2064,7 @@ describe('Server: POST /api/inbox with status', () => {
   });
 
   it('rejects invalid status value', async () => {
-    const s = createICCServer({ host: '127.0.0.1', port: 0 });
+    const s = createICCServer({ host: '127.0.0.1', port: 0, noAuth: true });
     const { port } = await s.start();
     try {
       const res = await httpRequest(port, 'POST', '/api/inbox', {
@@ -2077,7 +2077,7 @@ describe('Server: POST /api/inbox with status', () => {
   });
 
   it('returns null status when not provided', async () => {
-    const s = createICCServer({ host: '127.0.0.1', port: 0 });
+    const s = createICCServer({ host: '127.0.0.1', port: 0, noAuth: true });
     const { port } = await s.start();
     try {
       const res = await httpRequest(port, 'POST', '/api/inbox', {

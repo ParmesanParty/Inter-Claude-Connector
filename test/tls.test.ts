@@ -94,7 +94,7 @@ describe('HTTPS Server', () => {
     resetInbox(testDir);
     initInbox();
 
-    const s = createICCServer({ host: '127.0.0.1', port: 0 });
+    const s = createICCServer({ host: '127.0.0.1', port: 0, noAuth: true });
     const info = await s.start();
 
     try {
@@ -160,7 +160,7 @@ describe('End-to-end mTLS', () => {
     resetInbox(testDir);
     initInbox();
 
-    const s = createICCServer({ host: '127.0.0.1', port: 0 });
+    const s = createICCServer({ host: '127.0.0.1', port: 0, noAuth: true });
     const info = await s.start();
 
     try {

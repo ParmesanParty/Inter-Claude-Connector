@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { readFileSync, writeFileSync, mkdirSync, existsSync, unlinkSync, readdirSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync, existsSync, unlinkSync, readdirSync, chmodSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { randomBytes } from 'node:crypto';
@@ -96,6 +96,7 @@ async function serve(): Promise<void> {
   const server = createICCServer({
     port: flags.port ? parseInt(flags.port as string, 10) : undefined,
     host: flags.host as string | undefined,
+    noAuth: flags['no-auth'] as boolean | undefined,
   });
   await server.start();
   // Keep process alive
@@ -267,6 +268,7 @@ async function init() {
     }
 
     writeFileSync(configPath, JSON.stringify(config, null, 2) + '\n');
+    try { chmodSync(configPath, 0o600); } catch { /* Windows compat */ }
     console.log('Config saved to', configPath);
     return;
   }
@@ -302,6 +304,7 @@ async function init() {
   }
 
   writeFileSync(configPath, JSON.stringify(config, null, 2) + '\n');
+  try { chmodSync(configPath, 0o600); } catch { /* Windows compat */ }
   console.log('Config saved to', configPath);
 }
 
@@ -337,6 +340,7 @@ async function config() {
 
     mkdirSync(join(homedir(), '.icc'), { recursive: true });
     writeFileSync(configPath, JSON.stringify(config, null, 2) + '\n');
+    try { chmodSync(configPath, 0o600); } catch { /* Windows compat */ }
     console.log(`Set ${key} = ${value}`);
     return;
   }
@@ -974,7 +978,7 @@ Inter-Claude Connector (ICC) — v0.2.0
 Usage: icc <command> [options]
 
 Commands:
-  serve [--port N] [--host H]              Start the ICC API server
+  serve [--port N] [--host H] [--no-auth]   Start the ICC API server
   web [--port N]                            Start the web UI (default: port 3180)
   mcp                                       Start MCP server on stdio (for Claude Code)
   send --to <addr> <message> [--message M]   Send an inbox message to an address

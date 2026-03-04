@@ -177,7 +177,7 @@ describe('Server: GET /api/registry', () => {
   beforeEach(freshState);
 
   it('lists registered instances with auth', async () => {
-    const s = createICCServer({ host: '127.0.0.1', port: 0 });
+    const s = createICCServer({ host: '127.0.0.1', port: 0, noAuth: true });
     const { port } = await s.start();
     try {
       // Register via POST first
@@ -197,7 +197,7 @@ describe('Server: GET /api/registry', () => {
   });
 
   it('returns empty list when no instances registered', async () => {
-    const s = createICCServer({ host: '127.0.0.1', port: 0 });
+    const s = createICCServer({ host: '127.0.0.1', port: 0, noAuth: true });
     const { port } = await s.start();
     try {
       const res = await httpRequest(port, 'GET', '/api/registry');
@@ -215,7 +215,7 @@ describe('Server: GET /api/registry', () => {
     config.server.tls = { enabled: false, certPath: null, keyPath: null, caPath: null };
     config.server.localToken = 'test-auth-token';
     config.server.peerTokens = {};
-    const s = createICCServer({ host: '127.0.0.1', port: 0 });
+    const s = createICCServer({ host: '127.0.0.1', port: 0, noAuth: true });
     const { port } = await s.start();
     try {
       const res = await httpRequest(port, 'GET', '/api/registry', null, null);
@@ -230,7 +230,7 @@ describe('Server: POST /api/registry', () => {
   beforeEach(freshState);
 
   it('registers an instance', async () => {
-    const s = createICCServer({ host: '127.0.0.1', port: 0 });
+    const s = createICCServer({ host: '127.0.0.1', port: 0, noAuth: true });
     const { port } = await s.start();
     try {
       const res = await httpRequest(port, 'POST', '/api/registry', {
@@ -246,7 +246,7 @@ describe('Server: POST /api/registry', () => {
   });
 
   it('rejects missing fields', async () => {
-    const s = createICCServer({ host: '127.0.0.1', port: 0 });
+    const s = createICCServer({ host: '127.0.0.1', port: 0, noAuth: true });
     const { port } = await s.start();
     try {
       const res1 = await httpRequest(port, 'POST', '/api/registry', { instance: 'icc' });
@@ -265,7 +265,7 @@ describe('Server: POST /api/registry', () => {
     config.server.tls = { enabled: false, certPath: null, keyPath: null, caPath: null };
     config.server.localToken = 'test-auth-token';
     config.server.peerTokens = {};
-    const s = createICCServer({ host: '127.0.0.1', port: 0 });
+    const s = createICCServer({ host: '127.0.0.1', port: 0, noAuth: true });
     const { port } = await s.start();
     try {
       const res = await httpRequest(port, 'POST', '/api/registry', {
@@ -326,7 +326,7 @@ describe('Server: DELETE /api/registry/:instance', () => {
   beforeEach(freshState);
 
   it('deregisters an existing instance with matching PID', async () => {
-    const s = createICCServer({ host: '127.0.0.1', port: 0 });
+    const s = createICCServer({ host: '127.0.0.1', port: 0, noAuth: true });
     const { port } = await s.start();
     try {
       // Register first
@@ -350,7 +350,7 @@ describe('Server: DELETE /api/registry/:instance', () => {
   });
 
   it('refuses deregister with non-matching PID', async () => {
-    const s = createICCServer({ host: '127.0.0.1', port: 0 });
+    const s = createICCServer({ host: '127.0.0.1', port: 0, noAuth: true });
     const { port } = await s.start();
     try {
       await httpRequest(port, 'POST', '/api/registry', {
@@ -369,7 +369,7 @@ describe('Server: DELETE /api/registry/:instance', () => {
   });
 
   it('returns removed: false for nonexistent instance', async () => {
-    const s = createICCServer({ host: '127.0.0.1', port: 0 });
+    const s = createICCServer({ host: '127.0.0.1', port: 0, noAuth: true });
     const { port } = await s.start();
     try {
       const res = await httpRequest(port, 'DELETE', '/api/registry/nonexistent');
@@ -388,7 +388,7 @@ describe('Server: DELETE /api/registry/:instance', () => {
     config.server.tls = { enabled: false, certPath: null, keyPath: null, caPath: null };
     config.server.localToken = 'test-auth-token';
     config.server.peerTokens = {};
-    const s = createICCServer({ host: '127.0.0.1', port: 0 });
+    const s = createICCServer({ host: '127.0.0.1', port: 0, noAuth: true });
     const { port } = await s.start();
     try {
       const res = await httpRequest(port, 'DELETE', '/api/registry/icc', null, 'wrong-token');
@@ -414,7 +414,7 @@ describe('Server: GET /api/instances', () => {
     resolveInstance('/home/user/code/my-project');
     resolveInstance('/home/user/code/other-project');
 
-    const s = createICCServer({ host: '127.0.0.1', port: 0 });
+    const s = createICCServer({ host: '127.0.0.1', port: 0, noAuth: true });
     const { port } = await s.start();
     try {
       const res = await httpRequest(port, 'GET', '/api/instances');
@@ -436,7 +436,7 @@ describe('Server: GET /api/instances', () => {
     config.server.tls = { enabled: false, certPath: null, keyPath: null, caPath: null };
     config.server.localToken = 'test-auth-token';
     config.server.peerTokens = {};
-    const s = createICCServer({ host: '127.0.0.1', port: 0 });
+    const s = createICCServer({ host: '127.0.0.1', port: 0, noAuth: true });
     const { port } = await s.start();
     try {
       const res = await httpRequest(port, 'GET', '/api/instances', null, 'wrong-token');
@@ -447,7 +447,7 @@ describe('Server: GET /api/instances', () => {
   });
 
   it('returns empty list when no instances indexed', async () => {
-    const s = createICCServer({ host: '127.0.0.1', port: 0 });
+    const s = createICCServer({ host: '127.0.0.1', port: 0, noAuth: true });
     const { port } = await s.start();
     try {
       const res = await httpRequest(port, 'GET', '/api/instances');

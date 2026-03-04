@@ -1,7 +1,7 @@
 import { createServer, request as httpRequest } from 'node:http';
 import { createServer as createSecureServer, request as httpsRequest } from 'node:https';
 import type { IncomingMessage, ServerResponse, Server } from 'node:http';
-import { readFileSync, existsSync } from 'node:fs';
+import { readFileSync, existsSync, statSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { timingSafeEqual } from 'node:crypto';
@@ -160,6 +160,7 @@ function createReceiptSender(config: ICCConfig): (originalMessage: { id: string;
 interface ICCServerOptions {
   port?: number;
   host?: string;
+  noAuth?: boolean;
 }
 
 interface ICCServer {
@@ -326,10 +327,20 @@ export function createICCServer(options: ICCServerOptions = {}): ICCServer {
 
     // TLS challenge endpoint — no auth required (CA needs to reach this)
     if (method === 'GET' && url === '/.well-known/icc-challenge') {
+      const CHALLENGE_MAX_AGE = 10 * 60 * 1000; // 10 minutes
       const tlsDir = process.env.ICC_TLS_DIR || join(homedir(), '.icc', 'tls');
       const challengePath = join(tlsDir, '.challenge');
       try {
         if (existsSync(challengePath)) {
+          // Check TTL — expired challenges are deleted
+          try {
+            const stat = statSync(challengePath);
+            if (Date.now() - stat.mtimeMs > CHALLENGE_MAX_AGE) {
+              unlinkSync(challengePath);
+              sendJSON(res, 404, { error: 'Challenge expired' });
+              return;
+            }
+          } catch { /* stat failed, continue */ }
           const token = readFileSync(challengePath, 'utf-8').trim();
           res.writeHead(200, { 'Content-Type': 'text/plain', ...corsHeaders });
           res.end(token);
@@ -615,6 +626,15 @@ export function createICCServer(options: ICCServerOptions = {}): ICCServer {
 
   return {
     start() {
+      if (!options.noAuth) {
+        const hasAuth = config.server.localToken ||
+          Object.keys(config.server.peerTokens || {}).length > 0;
+        if (!hasAuth) {
+          return Promise.reject(new Error(
+            'No authentication configured. Run \'icc init\' or start with noAuth option for development.'
+          ));
+        }
+      }
       return new Promise<{ port: number; host: string }>((resolve) => {
         server.listen(port, host, () => {
           const addr = server.address() as { port: number };

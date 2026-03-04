@@ -118,7 +118,7 @@ describe('Server: checkAuth resolution', () => {
     config.server.localToken = tokenConfig.localToken ?? null;
     config.server.peerTokens = tokenConfig.peerTokens ?? {};
 
-    const s = createICCServer({ host: '127.0.0.1', port: 0 });
+    const s = createICCServer({ host: '127.0.0.1', port: 0, noAuth: true });
     const info = await s.start();
     try {
       await fn(info.port);
@@ -184,7 +184,7 @@ describe('Server: validateFrom on /api/message', () => {
     config.server.localToken = tokenConfig.localToken ?? null;
     config.server.peerTokens = tokenConfig.peerTokens ?? {};
 
-    const s = createICCServer({ host: '127.0.0.1', port: 0 });
+    const s = createICCServer({ host: '127.0.0.1', port: 0, noAuth: true });
     const info = await s.start();
     try {
       await fn(info.port);
@@ -250,7 +250,7 @@ describe('Server: validateFrom on /api/inbox', () => {
     config.server.localToken = tokenConfig.localToken ?? null;
     config.server.peerTokens = tokenConfig.peerTokens ?? {};
 
-    const s = createICCServer({ host: '127.0.0.1', port: 0 });
+    const s = createICCServer({ host: '127.0.0.1', port: 0, noAuth: true });
     const info = await s.start();
     try {
       await fn(info.port);
@@ -299,7 +299,7 @@ describe('Server: token resolution priority', () => {
     config.server.localToken = tokenConfig.localToken ?? null;
     config.server.peerTokens = tokenConfig.peerTokens ?? {};
 
-    const s = createICCServer({ host: '127.0.0.1', port: 0 });
+    const s = createICCServer({ host: '127.0.0.1', port: 0, noAuth: true });
     const info = await s.start();
     try {
       await fn(info.port);
@@ -325,6 +325,38 @@ describe('Server: token resolution priority', () => {
         assert.equal(res2.status, 403);
       }
     );
+  });
+});
+
+// --- auth-required startup ---
+
+describe('auth-required startup', () => {
+  it('should throw on start if no auth configured and no noAuth', async () => {
+    process.env.ICC_IDENTITY = 'no-auth-test';
+    clearConfigCache();
+    const config = loadConfig();
+    config.remotes = {};
+    config.server.tls = { enabled: false } as TlsConfig;
+    config.server.localToken = null;
+    config.server.peerTokens = {};
+
+    const s = createICCServer({ host: '127.0.0.1', port: 0 });
+    await assert.rejects(s.start(), /No authentication configured/);
+  });
+
+  it('should allow start with noAuth option', async () => {
+    process.env.ICC_IDENTITY = 'no-auth-test';
+    clearConfigCache();
+    const config = loadConfig();
+    config.remotes = {};
+    config.server.tls = { enabled: false } as TlsConfig;
+    config.server.localToken = null;
+    config.server.peerTokens = {};
+
+    const s = createICCServer({ host: '127.0.0.1', port: 0, noAuth: true });
+    const info = await s.start();
+    await s.stop();
+    assert.ok(info.port > 0);
   });
 });
 

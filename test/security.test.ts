@@ -183,7 +183,7 @@ describe('Server: /api/readfile', () => {
     config.server.tls = { enabled: false, certPath: null, keyPath: null, caPath: null };
     config.server.localToken = null;
     config.server.peerTokens = {};
-    const s = createICCServer({ host: '127.0.0.1', port: 0 });
+    const s = createICCServer({ host: '127.0.0.1', port: 0, noAuth: true });
     const info = await s.start();
     try {
       const res = await httpRequest(info.port, 'POST', '/api/readfile', { path: '/tmp/test' });
@@ -201,7 +201,7 @@ describe('Server: /api/readfile', () => {
     config.server.tls = { enabled: false, certPath: null, keyPath: null, caPath: null };
     config.server.localToken = null;
     config.server.peerTokens = {};
-    const s = createICCServer({ host: '127.0.0.1', port: 0 });
+    const s = createICCServer({ host: '127.0.0.1', port: 0, noAuth: true });
     const info = await s.start();
     try {
       const res = await httpRequest(info.port, 'POST', '/api/readfile', {});
@@ -220,7 +220,7 @@ describe('Server: /api/exec', () => {
     config.server.tls = { enabled: false, certPath: null, keyPath: null, caPath: null };
     config.server.localToken = null;
     config.server.peerTokens = {};
-    const s = createICCServer({ host: '127.0.0.1', port: 0 });
+    const s = createICCServer({ host: '127.0.0.1', port: 0, noAuth: true });
     const info = await s.start();
     try {
       const res = await httpRequest(info.port, 'POST', '/api/exec', { command: 'ls' });
@@ -238,7 +238,7 @@ describe('Server: /api/exec', () => {
     config.server.tls = { enabled: false, certPath: null, keyPath: null, caPath: null };
     config.server.localToken = null;
     config.server.peerTokens = {};
-    const s = createICCServer({ host: '127.0.0.1', port: 0 });
+    const s = createICCServer({ host: '127.0.0.1', port: 0, noAuth: true });
     const info = await s.start();
     try {
       const res = await httpRequest(info.port, 'POST', '/api/exec', {});
