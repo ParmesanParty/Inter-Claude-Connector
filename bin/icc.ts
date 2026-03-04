@@ -32,7 +32,7 @@ function parseFlags(args: string[]): { flags: Record<string, string | boolean>; 
 const { flags, positional } = parseFlags(args.slice(1));
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-function httpJSON(url: string, method: string, body: unknown): Promise<any> {
+function httpJSON(url: string, method: string, body: unknown, token?: string | null): Promise<any> {
   return new Promise((resolve, reject) => {
     const urlObj = new URL(url);
     const payload = JSON.stringify(body);
@@ -42,6 +42,7 @@ function httpJSON(url: string, method: string, body: unknown): Promise<any> {
       headers: {
         'Content-Type': 'application/json',
         'Content-Length': Buffer.byteLength(payload),
+        ...(token && { 'Authorization': `Bearer ${token}` }),
       },
     }, (res) => {
       let data = '';
@@ -79,6 +80,10 @@ async function main() {
       return instance();
     case 'tls':
       return tls();
+    case 'invite':
+      return invite();
+    case 'join':
+      return joinMesh();
     case 'help':
     case '--help':
     case '-h':
@@ -969,6 +974,168 @@ async function tls() {
       console.error('Usage: icc tls <init|serve|enroll|status>');
       process.exit(1);
   }
+}
+
+async function invite(): Promise<void> {
+  const identity = positional[0];
+  if (!identity) {
+    console.error('Usage: icc invite <identity> --ip <ip> [--port 3179]');
+    process.exit(1);
+  }
+
+  const ip = flags.ip as string;
+  if (!ip) {
+    console.error('--ip is required');
+    process.exit(1);
+  }
+
+  const peerPort = flags.port ? parseInt(flags.port as string, 10) : 3179;
+  const { loadConfig, writeConfig, clearConfigCache, getLocalToken } = await import('../src/config.ts');
+  clearConfigCache();
+  const config = loadConfig();
+
+  // 1. Add remote with http:// URL (will be upgraded to https after enrollment)
+  if (!config.remotes) config.remotes = {};
+  config.remotes[identity] = { httpUrl: `http://${ip}:${peerPort}` };
+
+  // 2. Generate peerToken for inbound auth from new host
+  if (!config.server.peerTokens) config.server.peerTokens = {};
+  const peerToken = randomBytes(32).toString('hex');
+  config.server.peerTokens[identity] = peerToken;
+
+  // 3. Generate join token
+  const joinToken = randomBytes(32).toString('hex');
+
+  // 4. Save config
+  writeConfig(config);
+  console.log(`Added ${identity} to remotes (http://${ip}:${peerPort})`);
+  console.log(`Generated peer token for ${identity}`);
+
+  // 5. Notify enrollment server to reload config
+  const enrollPort = config.server.enrollPort;
+  const localToken = getLocalToken(config);
+  try {
+    await httpJSON(`http://127.0.0.1:${enrollPort}/enroll/reload`, 'POST', {}, localToken);
+    console.log('Enrollment server reloaded');
+  } catch {
+    console.log('Note: enrollment server not running or reload failed — restart manually');
+  }
+
+  // 6. Register join token with enrollment server
+  try {
+    await httpJSON(`http://127.0.0.1:${enrollPort}/enroll/register-invite`, 'POST', {
+      identity, joinToken, ip, port: peerPort,
+    }, localToken);
+    console.log('Join token registered with enrollment server');
+  } catch {
+    console.log('Note: could not register join token — enrollment server may not be running');
+  }
+
+  console.log(`\nRun on ${identity}:`);
+  console.log(`  icc join --ca ${config.identity} --token ${joinToken}`);
+}
+
+async function joinMesh(): Promise<void> {
+  const { loadConfig, writeConfig, clearConfigCache } = await import('../src/config.ts');
+  const { generateKeyAndCSR } = await import('../src/tls.ts');
+
+  clearConfigCache();
+  const config = loadConfig();
+  const identity = config.identity;
+  const joinToken = flags.token as string;
+  const caIdentity = flags.ca as string;
+
+  if (!joinToken || !caIdentity) {
+    console.error('Usage: icc join --ca <ca-identity> --token <join-token>');
+    process.exit(1);
+  }
+
+  // Determine CA enrollment URL
+  const caRemote = config.remotes?.[caIdentity];
+  let caUrl: string;
+  if (caRemote?.httpUrl) {
+    const u = new URL(caRemote.httpUrl);
+    u.port = String(config.server.enrollPort);
+    caUrl = u.toString().replace(/\/$/, '');
+  } else if (flags.url) {
+    caUrl = (flags.url as string).replace(/\/$/, '');
+  } else {
+    console.error(`No remote config for CA "${caIdentity}". Use --url to specify the enrollment server URL.`);
+    process.exit(1);
+  }
+
+  const ownPort = config.server.port;
+  const tlsDir = join(homedir(), '.icc', 'tls');
+
+  // Phase 1: Generate key + CSR
+  console.log('Generating key pair and CSR...');
+  const csr = generateKeyAndCSR(tlsDir, identity);
+
+  // Phase 2: Authenticate with join token
+  console.log(`Joining mesh via CA at ${caUrl}...`);
+  const ownIp = flags.ip as string || '0.0.0.0';
+  const joinRes = await httpJSON(`${caUrl}/enroll/join`, 'POST', {
+    identity,
+    joinToken,
+    httpUrl: `http://${ownIp}:${ownPort}`,
+  });
+
+  if (!joinRes.enrollmentId) {
+    console.error('Join failed:', joinRes.error || 'Unknown error');
+    process.exit(1);
+  }
+
+  // Write challenge for ICC server to serve
+  mkdirSync(tlsDir, { recursive: true });
+  writeFileSync(join(tlsDir, '.challenge'), joinRes.challenge);
+  console.log('Challenge written. Ensure ICC server is running on this host.');
+
+  // Phase 3: Submit CSR
+  console.log('Submitting CSR...');
+  const result = await httpJSON(`${caUrl}/enroll/join/complete`, 'POST', {
+    enrollmentId: joinRes.enrollmentId,
+    csr,
+  });
+
+  if (!result.cert) {
+    console.error('Join failed:', result.error || 'Unknown error');
+    try { unlinkSync(join(tlsDir, '.challenge')); } catch { /* */ }
+    process.exit(1);
+  }
+
+  // Phase 4: Auto-configure everything
+  writeFileSync(join(tlsDir, 'server.crt'), result.cert);
+  writeFileSync(join(tlsDir, 'ca.crt'), result.caCert);
+  try { unlinkSync(join(tlsDir, '.challenge')); } catch { /* */ }
+
+  // Enable TLS
+  config.server.tls = {
+    enabled: true,
+    certPath: join(tlsDir, 'server.crt'),
+    keyPath: join(tlsDir, 'server.key'),
+    caPath: join(tlsDir, 'ca.crt'),
+  };
+
+  // Configure all peers from CA response
+  if (!config.remotes) config.remotes = {};
+  if (!config.server.peerTokens) config.server.peerTokens = {};
+  for (const peer of result.peers || []) {
+    config.remotes[peer.identity] = {
+      httpUrl: peer.httpsUrl,
+      token: peer.outboundToken,
+    };
+    config.server.peerTokens[peer.identity] = peer.inboundToken;
+  }
+
+  // Set CA identity
+  config.tls = { ca: caIdentity };
+
+  writeConfig(config);
+
+  console.log('Join complete!');
+  console.log('  TLS: enabled');
+  console.log(`  Peers configured: ${(result.peers || []).map((p: { identity: string }) => p.identity).join(', ') || 'none'}`);
+  console.log('\nRestart your ICC server: systemctl --user restart icc-server');
 }
 
 function help() {

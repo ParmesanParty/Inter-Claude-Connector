@@ -16,6 +16,7 @@ interface EnrollmentOptions {
   port?: number;
   challengeTTL?: number;
   certDays?: number;
+  reloadToken?: string;
 }
 
 interface EnrollmentEntry {
@@ -30,17 +31,27 @@ interface EnrollmentServer {
   stop(): Promise<void>;
 }
 
+interface JoinEntry {
+  identity: string;
+  joinToken: string;
+  ip: string;
+  port: number;
+  expiresAt: number;
+}
+
 export function createEnrollmentServer(options: EnrollmentOptions): EnrollmentServer {
   const {
     caDir,
-    peerConfigs,
     host = '0.0.0.0',
     port = 4179,
     challengeTTL = 300_000,
     certDays = 365,
+    reloadToken,
   } = options;
 
+  let peerConfigs = { ...options.peerConfigs };
   const enrollments = new Map<string, EnrollmentEntry>();
+  const joinTokens = new Map<string, JoinEntry>();
   const rateLimits = new Map<string, { count: number; resetAt: number }>();
   const RATE_LIMIT = 3;
   const RATE_WINDOW = 15 * 60 * 1000; // 15 minutes
@@ -78,6 +89,31 @@ export function createEnrollmentServer(options: EnrollmentOptions): EnrollmentSe
     for (const [id, enrollment] of enrollments) {
       if (enrollment.expiresAt < now) enrollments.delete(id);
     }
+  }
+
+  function pushMeshUpdate(config: { remotes: Record<string, { httpUrl?: string; token?: string }> }, peerIdentity: string, payload: unknown): void {
+    const peer = config.remotes[peerIdentity];
+    if (!peer?.httpUrl) return;
+    const token = peer.token || '';
+    const url = new URL('/api/mesh-update', peer.httpUrl);
+    const data = JSON.stringify(payload);
+    const isHttps = url.protocol === 'https:';
+    const reqFn = isHttps ? (import('node:https').then(m => m.request)) : Promise.resolve(httpRequest);
+    reqFn.then(requestFn => {
+      const req = requestFn(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Content-Length': String(Buffer.byteLength(data)),
+          'Authorization': `Bearer ${token}`,
+        },
+        timeout: 10000,
+      });
+      req.on('error', (err: Error) => log.warn(`mesh-update push to ${peerIdentity} failed: ${err.message}`));
+      req.on('timeout', () => { req.destroy(); });
+      req.write(data);
+      req.end();
+    }).catch((err: Error) => log.warn(`mesh-update push to ${peerIdentity} failed: ${err.message}`));
   }
 
   const server = createServer(async (req: IncomingMessage, res: ServerResponse) => {
@@ -172,6 +208,198 @@ export function createEnrollmentServer(options: EnrollmentOptions): EnrollmentSe
         sendJSON(res, 200, { cert, caCert });
       } catch (err) {
         log.error(`CSR signing error: ${(err as Error).message}`);
+        sendJSON(res, 500, { error: (err as Error).message });
+      }
+      return;
+    }
+
+    // POST /enroll/reload — re-read config for updated peer list
+    if (method === 'POST' && url === '/enroll/reload') {
+      try {
+        const authHeader = req.headers.authorization;
+        if (!reloadToken || authHeader !== `Bearer ${reloadToken}`) {
+          sendJSON(res, 401, { error: 'Unauthorized' });
+          return;
+        }
+        const { clearConfigCache, loadConfig } = await import('./config.ts');
+        clearConfigCache();
+        const config = loadConfig();
+        peerConfigs = {};
+        for (const [id, peer] of Object.entries(config.remotes || {})) {
+          if (peer.httpUrl) peerConfigs[id] = { httpUrl: peer.httpUrl };
+        }
+        peerConfigs[config.identity] = { httpUrl: `http://127.0.0.1:${config.server.port}` };
+        log.info(`Enrollment config reloaded: ${Object.keys(peerConfigs).join(', ')}`);
+        sendJSON(res, 200, { ok: true, peers: Object.keys(peerConfigs) });
+      } catch (err) {
+        sendJSON(res, 500, { error: (err as Error).message });
+      }
+      return;
+    }
+
+    // POST /enroll/register-invite — store a join token for a pending invite
+    if (method === 'POST' && url === '/enroll/register-invite') {
+      try {
+        const authHeader = req.headers.authorization;
+        if (!reloadToken || authHeader !== `Bearer ${reloadToken}`) {
+          sendJSON(res, 401, { error: 'Unauthorized' });
+          return;
+        }
+        const body = JSON.parse(await readBody(req));
+        const { identity, joinToken, ip, port: joinPort } = body;
+        if (!identity || !joinToken) {
+          sendJSON(res, 400, { error: 'Missing identity or joinToken' });
+          return;
+        }
+        joinTokens.set(identity, {
+          identity,
+          joinToken,
+          ip: ip || '0.0.0.0',
+          port: joinPort || 3179,
+          expiresAt: Date.now() + 15 * 60 * 1000,
+        });
+        log.info(`Join token registered for "${identity}" (expires in 15min)`);
+        sendJSON(res, 200, { ok: true });
+      } catch (err) {
+        sendJSON(res, 400, { error: (err as Error).message });
+      }
+      return;
+    }
+
+    // POST /enroll/join — new host authenticates with a join token
+    if (method === 'POST' && url === '/enroll/join') {
+      try {
+        const body = JSON.parse(await readBody(req));
+        const { identity, joinToken, httpUrl } = body;
+
+        if (!identity || !joinToken) {
+          sendJSON(res, 400, { error: 'Missing identity or joinToken' });
+          return;
+        }
+
+        const invite = joinTokens.get(identity);
+        if (!invite || invite.joinToken !== joinToken) {
+          sendJSON(res, 403, { error: 'Invalid or expired join token' });
+          return;
+        }
+        if (Date.now() > invite.expiresAt) {
+          joinTokens.delete(identity);
+          sendJSON(res, 403, { error: 'Join token expired' });
+          return;
+        }
+
+        if (!checkRateLimit(identity)) {
+          const retryAfter = Math.ceil(RATE_WINDOW / 1000);
+          res.writeHead(429, { 'Retry-After': String(retryAfter), 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Rate limit exceeded' }));
+          return;
+        }
+
+        // Update peerConfigs with the joining host's URL
+        if (httpUrl) peerConfigs[identity] = { httpUrl };
+
+        // Generate enrollment challenge (reuse existing mechanism)
+        const challenge = randomBytes(32).toString('hex');
+        const enrollmentId = randomBytes(16).toString('hex');
+        enrollments.set(enrollmentId, {
+          identity,
+          challenge,
+          expiresAt: Date.now() + challengeTTL,
+        });
+
+        log.info(`Join started for "${identity}" (enrollment ${enrollmentId.slice(0, 8)}...)`);
+        sendJSON(res, 200, { enrollmentId, challenge });
+      } catch (err) {
+        sendJSON(res, 400, { error: (err as Error).message });
+      }
+      return;
+    }
+
+    // POST /enroll/join/complete — verify challenge, sign CSR, return cert + peer list
+    if (method === 'POST' && url === '/enroll/join/complete') {
+      try {
+        const body = JSON.parse(await readBody(req));
+        const { enrollmentId, csr } = body;
+
+        if (!enrollmentId || !csr) {
+          sendJSON(res, 400, { error: 'Missing enrollmentId or csr' });
+          return;
+        }
+
+        purgeExpired();
+        const entry = enrollments.get(enrollmentId);
+        if (!entry) {
+          sendJSON(res, 400, { error: 'Invalid or expired enrollmentId' });
+          return;
+        }
+
+        const peerConfig = peerConfigs[entry.identity];
+        if (!peerConfig) {
+          sendJSON(res, 400, { error: `No config for "${entry.identity}"` });
+          return;
+        }
+
+        log.info(`Verifying challenge for join: "${entry.identity}" at ${peerConfig.httpUrl}`);
+        const verified = await verifyChallenge(peerConfig.httpUrl, entry.challenge);
+
+        if (!verified) {
+          enrollments.delete(enrollmentId);
+          log.warn(`Join challenge verification failed for "${entry.identity}"`);
+          sendJSON(res, 403, { error: 'Challenge verification failed' });
+          return;
+        }
+
+        // Sign CSR
+        log.info(`Challenge verified for "${entry.identity}", signing CSR`);
+        const cert = signCSR(caDir, csr, entry.identity, certDays);
+        const caCert = readFileSync(join(caDir, 'ca.crt'), 'utf-8');
+        enrollments.delete(enrollmentId);
+
+        // Build peer list with bidirectional tokens for existing peers
+        const { loadConfig, writeConfig } = await import('./config.ts');
+        const config = loadConfig({ reload: true });
+        const peers: { identity: string; httpsUrl: string; outboundToken: string; inboundToken: string }[] = [];
+
+        for (const [peerIdentity, peerRemote] of Object.entries(config.remotes || {})) {
+          if (peerIdentity === entry.identity) continue;
+          if (!peerRemote.httpUrl) continue;
+
+          const tokenForNewHost = randomBytes(32).toString('hex');
+          const tokenFromNewHost = randomBytes(32).toString('hex');
+
+          peers.push({
+            identity: peerIdentity,
+            httpsUrl: peerRemote.httpUrl,
+            outboundToken: tokenForNewHost,
+            inboundToken: tokenFromNewHost,
+          });
+
+          // Push mesh-update to existing peer (best-effort)
+          const invite = joinTokens.get(entry.identity);
+          const httpsUrl = invite ? `https://${invite.ip}:${invite.port}` : '';
+          pushMeshUpdate(config, peerIdentity, {
+            action: 'add-peer',
+            peer: {
+              identity: entry.identity,
+              httpsUrl,
+              peerToken: tokenFromNewHost,
+            },
+            outboundToken: tokenForNewHost,
+          });
+        }
+
+        // Update CA config: set new peer's URL to https
+        const invite = joinTokens.get(entry.identity);
+        if (invite && config.remotes[entry.identity]) {
+          config.remotes[entry.identity]!.httpUrl = `https://${invite.ip}:${invite.port}`;
+        }
+        writeConfig(config);
+        joinTokens.delete(entry.identity);
+
+        log.info(`Join complete for "${entry.identity}" — ${peers.length} peers configured`);
+        sendJSON(res, 200, { cert, caCert, peers });
+      } catch (err) {
+        log.error(`Join complete error: ${(err as Error).message}`);
         sendJSON(res, 500, { error: (err as Error).message });
       }
       return;
