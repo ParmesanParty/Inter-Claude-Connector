@@ -1,206 +1,129 @@
 import { describe, it, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, existsSync, mkdirSync, readdirSync, writeFileSync, rmSync } from 'node:fs';
+import { existsSync, readdirSync, writeFileSync } from 'node:fs';
 import { join, basename } from 'node:path';
-import { tmpdir } from 'node:os';
-import { execFileSync, spawn } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { sanitize } from '../src/instances.ts';
+import { runHook, createTmpHome } from './helpers.ts';
 
 const iccBin = join(import.meta.dirname, '..', 'bin', 'icc.ts');
-// Derive instance name the same way the hook does: sanitize(basename(cwd))
 const instanceName = sanitize(basename(process.cwd()));
 
-// Run `icc hook <subcmd>` in a temp ICC_HOME with given env overrides
-function runHook(subcmd: string, env: Record<string, string> = {}, extraArgs: string[] = []): string {
-  const result = execFileSync('node', [iccBin, 'hook', subcmd, ...extraArgs], {
-    env: {
-      ...process.env,
-      HOME: env.HOME || process.env.HOME,
-      ICC_IDENTITY: 'test-host',
-      ICC_AUTH_TOKEN: 'test-token',
-      ICC_REMOTE_SSH: '',
-      ICC_REMOTE_HTTP: '',
-      ...env,
-    },
-    timeout: 10000,
-    encoding: 'utf-8',
-    stdio: ['pipe', 'pipe', 'pipe'],
-  });
-  return result;
-}
-
 describe('Heartbeat: watch writes heartbeat file', () => {
-  let tmpHome: string;
-
-  beforeEach(() => {
-    tmpHome = mkdtempSync(join(tmpdir(), 'icc-hb-test-'));
-    mkdirSync(join(tmpHome, '.icc'), { recursive: true });
-  });
-
-  afterEach(() => {
-    try { rmSync(tmpHome, { recursive: true, force: true }); } catch {}
-  });
+  let tmp: ReturnType<typeof createTmpHome>;
+  beforeEach(() => { tmp = createTmpHome(); });
+  afterEach(() => { tmp.cleanup(); });
 
   it('watch creates heartbeat and PID files, deletes both on exit', () => {
-    // Run watch with a very short timeout so it exits quickly
-    const stdout = runHook('watch', { HOME: tmpHome }, ['--timeout', '1', '--interval', '1']);
+    const stdout = runHook('watch', { HOME: tmp.tmpHome }, ['--timeout', '1', '--interval', '1']);
     assert.ok(stdout.includes('[ICC] Watcher cycled'), 'should output watcher cycled');
 
-    // After exit, both heartbeat and PID files should be deleted
-    const iccDir = join(tmpHome, '.icc');
-    const files = readdirSync(iccDir);
+    const files = readdirSync(join(tmp.tmpHome, '.icc'));
     const watcherFiles = files.filter(f => f.startsWith('watcher.'));
     assert.equal(watcherFiles.length, 0, 'heartbeat and PID files should be deleted after watch exits');
   });
 
   it('watch starts even when a provisional heartbeat exists (startup race)', () => {
-    // Simulate what startup does: write a fresh provisional heartbeat
-    const iccDir = join(tmpHome, '.icc');
-    const hbPath = join(iccDir, `watcher.${instanceName}.heartbeat`);
+    const hbPath = join(tmp.tmpHome, '.icc', `watcher.${instanceName}.heartbeat`);
     writeFileSync(hbPath, new Date().toISOString());
 
-    // watch should NOT be blocked by the provisional heartbeat
-    const stdout = runHook('watch', { HOME: tmpHome }, ['--timeout', '1', '--interval', '1']);
+    const stdout = runHook('watch', { HOME: tmp.tmpHome }, ['--timeout', '1', '--interval', '1']);
     assert.ok(stdout.includes('[ICC] Watcher cycled'), 'watch should start despite provisional heartbeat');
     assert.ok(!stdout.includes('already active'), 'should NOT report already active');
   });
 });
 
 describe('Heartbeat: check detects missing watcher', () => {
-  let tmpHome: string;
-
-  beforeEach(() => {
-    tmpHome = mkdtempSync(join(tmpdir(), 'icc-hb-test-'));
-    mkdirSync(join(tmpHome, '.icc'), { recursive: true });
-  });
-
-  afterEach(() => {
-    try { rmSync(tmpHome, { recursive: true, force: true }); } catch {}
-  });
+  let tmp: ReturnType<typeof createTmpHome>;
+  beforeEach(() => { tmp = createTmpHome(); });
+  afterEach(() => { tmp.cleanup(); });
 
   it('check outputs watcher-not-running when no heartbeat exists', () => {
-    const stdout = runHook('check', { HOME: tmpHome });
+    const stdout = runHook('check', { HOME: tmp.tmpHome });
     assert.ok(stdout.includes('[ICC] Watcher not running'), 'should report watcher not running');
   });
 
   it('check is silent when heartbeat is fresh', () => {
-    const iccDir = join(tmpHome, '.icc');
-    const hbPath = join(iccDir, `watcher.${instanceName}.heartbeat`);
+    const hbPath = join(tmp.tmpHome, '.icc', `watcher.${instanceName}.heartbeat`);
     writeFileSync(hbPath, new Date().toISOString());
 
-    const stdout = runHook('check', { HOME: tmpHome });
+    const stdout = runHook('check', { HOME: tmp.tmpHome });
     assert.ok(!stdout.includes('[ICC] Watcher not running'), 'should NOT report watcher not running');
   });
 
   it('check detects stale heartbeat (>30s old)', () => {
-    const iccDir = join(tmpHome, '.icc');
-    const hbPath = join(iccDir, `watcher.${instanceName}.heartbeat`);
+    const hbPath = join(tmp.tmpHome, '.icc', `watcher.${instanceName}.heartbeat`);
     const staleTime = new Date(Date.now() - 60000).toISOString();
     writeFileSync(hbPath, staleTime);
 
-    const stdout = runHook('check', { HOME: tmpHome });
+    const stdout = runHook('check', { HOME: tmp.tmpHome });
     assert.ok(stdout.includes('[ICC] Watcher not running'), 'should detect stale heartbeat');
     assert.ok(!existsSync(hbPath), 'should delete stale heartbeat file');
   });
 });
 
 describe('Heartbeat: startup cleans up stale heartbeat', () => {
-  let tmpHome: string;
-
-  beforeEach(() => {
-    tmpHome = mkdtempSync(join(tmpdir(), 'icc-hb-test-'));
-    mkdirSync(join(tmpHome, '.icc'), { recursive: true });
-  });
-
-  afterEach(() => {
-    try { rmSync(tmpHome, { recursive: true, force: true }); } catch {}
-  });
+  let tmp: ReturnType<typeof createTmpHome>;
+  beforeEach(() => { tmp = createTmpHome(); });
+  afterEach(() => { tmp.cleanup(); });
 
   it('startup writes a provisional heartbeat file', () => {
-    const iccDir = join(tmpHome, '.icc');
-    const hbPath = join(iccDir, `watcher.${instanceName}.heartbeat`);
-
-    // startup will fail to register (no server) but that's non-fatal
-    const stdout = runHook('startup', { HOME: tmpHome });
+    const hbPath = join(tmp.tmpHome, '.icc', `watcher.${instanceName}.heartbeat`);
+    const stdout = runHook('startup', { HOME: tmp.tmpHome });
     assert.ok(existsSync(hbPath), 'heartbeat should exist after startup');
     assert.ok(stdout.includes('[ICC] Start mail watcher'));
   });
 });
 
 describe('Heartbeat: PID monitoring', () => {
-  let tmpHome: string;
-
-  beforeEach(() => {
-    tmpHome = mkdtempSync(join(tmpdir(), 'icc-hb-test-'));
-    mkdirSync(join(tmpHome, '.icc'), { recursive: true });
-  });
-
-  afterEach(() => {
-    try { rmSync(tmpHome, { recursive: true, force: true }); } catch {}
-  });
+  let tmp: ReturnType<typeof createTmpHome>;
+  beforeEach(() => { tmp = createTmpHome(); });
+  afterEach(() => { tmp.cleanup(); });
 
   it('watch exits when monitored PID does not exist', () => {
-    const stdout = runHook('watch', { HOME: tmpHome }, ['--pid', '999999', '--interval', '1']);
-    // Dead PID → silent exit (no "Watcher cycled" since it exits before timeout)
+    const stdout = runHook('watch', { HOME: tmp.tmpHome }, ['--pid', '999999', '--interval', '1']);
     assert.ok(!stdout.includes('[ICC] Watcher cycled'), 'should exit before timeout');
-    // Files should be cleaned up
-    const files = readdirSync(join(tmpHome, '.icc'));
+    const files = readdirSync(join(tmp.tmpHome, '.icc'));
     const watcherFiles = files.filter(f => f.startsWith('watcher.'));
     assert.equal(watcherFiles.length, 0, 'should clean up files on PID death exit');
   });
 });
 
 describe('Heartbeat: SIGTERM cleanup', () => {
-  let tmpHome: string;
-
-  beforeEach(() => {
-    tmpHome = mkdtempSync(join(tmpdir(), 'icc-hb-test-'));
-    mkdirSync(join(tmpHome, '.icc'), { recursive: true });
-  });
-
-  afterEach(() => {
-    try { rmSync(tmpHome, { recursive: true, force: true }); } catch {}
-  });
+  let tmp: ReturnType<typeof createTmpHome>;
+  beforeEach(() => { tmp = createTmpHome(); });
+  afterEach(() => { tmp.cleanup(); });
 
   it('watch cleans up PID and heartbeat files on SIGTERM', async () => {
     const child = spawn('node', [iccBin, 'hook', 'watch', '--pid', String(process.pid), '--interval', '1'], {
-      env: { ...process.env, HOME: tmpHome, ICC_IDENTITY: 'test-host', ICC_AUTH_TOKEN: 'test-token', ICC_REMOTE_SSH: '', ICC_REMOTE_HTTP: '' },
+      env: { ...process.env, HOME: tmp.tmpHome, ICC_IDENTITY: 'test-host', ICC_REMOTE_SSH: '', ICC_REMOTE_HTTP: '' },
       stdio: 'pipe',
     });
 
-    // Wait for watcher to start and write heartbeat
     await new Promise(resolve => setTimeout(resolve, 1500));
-    const hbPath = join(tmpHome, '.icc', `watcher.${instanceName}.heartbeat`);
+    const hbPath = join(tmp.tmpHome, '.icc', `watcher.${instanceName}.heartbeat`);
     assert.ok(existsSync(hbPath), 'heartbeat should exist while watcher runs');
 
     child.kill('SIGTERM');
     await new Promise(resolve => child.on('close', resolve));
 
-    const files = readdirSync(join(tmpHome, '.icc'));
+    const files = readdirSync(join(tmp.tmpHome, '.icc'));
     const watcherFiles = files.filter(f => f.startsWith('watcher.'));
     assert.equal(watcherFiles.length, 0, 'SIGTERM should trigger cleanup');
   });
 });
 
 describe('Hook: session-end', () => {
-  let tmpHome: string;
-
-  beforeEach(() => {
-    tmpHome = mkdtempSync(join(tmpdir(), 'icc-hb-test-'));
-    mkdirSync(join(tmpHome, '.icc'), { recursive: true });
-  });
-
-  afterEach(() => {
-    try { rmSync(tmpHome, { recursive: true, force: true }); } catch {}
-  });
+  let tmp: ReturnType<typeof createTmpHome>;
+  beforeEach(() => { tmp = createTmpHome(); });
+  afterEach(() => { tmp.cleanup(); });
 
   it('session-end cleans up watcher files', () => {
-    const iccDir = join(tmpHome, '.icc');
-    // Create fake watcher files (non-existent PID)
+    const iccDir = join(tmp.tmpHome, '.icc');
     writeFileSync(join(iccDir, `watcher.${instanceName}.pid`), '999999');
     writeFileSync(join(iccDir, `watcher.${instanceName}.heartbeat`), new Date().toISOString());
 
-    runHook('session-end', { HOME: tmpHome });
+    runHook('session-end', { HOME: tmp.tmpHome });
 
     const files = readdirSync(iccDir);
     const watcherFiles = files.filter(f => f.startsWith('watcher.'));
@@ -209,147 +132,97 @@ describe('Hook: session-end', () => {
 });
 
 describe('Snooze: snooze-watcher and wake-watcher', () => {
-  let tmpHome: string;
-
-  beforeEach(() => {
-    tmpHome = mkdtempSync(join(tmpdir(), 'icc-hb-test-'));
-    mkdirSync(join(tmpHome, '.icc'), { recursive: true });
-  });
-
-  afterEach(() => {
-    try { rmSync(tmpHome, { recursive: true, force: true }); } catch {}
-  });
+  let tmp: ReturnType<typeof createTmpHome>;
+  beforeEach(() => { tmp = createTmpHome(); });
+  afterEach(() => { tmp.cleanup(); });
 
   it('snooze-watcher creates snooze file', () => {
-    const stdout = runHook('snooze-watcher', { HOME: tmpHome });
+    const stdout = runHook('snooze-watcher', { HOME: tmp.tmpHome });
     assert.ok(stdout.includes('[ICC] Watcher snoozed'), 'should confirm snooze');
-    const snoozePath = join(tmpHome, '.icc', `watcher.${instanceName}.snoozed`);
+    const snoozePath = join(tmp.tmpHome, '.icc', `watcher.${instanceName}.snoozed`);
     assert.ok(existsSync(snoozePath), 'snooze file should exist');
   });
 
   it('wake-watcher removes snooze file and triggers launch', () => {
-    // Create snooze file first
-    writeFileSync(join(tmpHome, '.icc', `watcher.${instanceName}.snoozed`), new Date().toISOString());
+    writeFileSync(join(tmp.tmpHome, '.icc', `watcher.${instanceName}.snoozed`), new Date().toISOString());
 
-    const stdout = runHook('wake-watcher', { HOME: tmpHome });
+    const stdout = runHook('wake-watcher', { HOME: tmp.tmpHome });
     assert.ok(stdout.includes('[ICC] Start mail watcher'), 'should trigger launch');
-    const snoozePath = join(tmpHome, '.icc', `watcher.${instanceName}.snoozed`);
+    const snoozePath = join(tmp.tmpHome, '.icc', `watcher.${instanceName}.snoozed`);
     assert.ok(!existsSync(snoozePath), 'snooze file should be deleted');
   });
 });
 
 describe('Snooze: startup respects snooze state', () => {
-  let tmpHome: string;
-
-  beforeEach(() => {
-    tmpHome = mkdtempSync(join(tmpdir(), 'icc-hb-test-'));
-    mkdirSync(join(tmpHome, '.icc'), { recursive: true });
-  });
-
-  afterEach(() => {
-    try { rmSync(tmpHome, { recursive: true, force: true }); } catch {}
-  });
+  let tmp: ReturnType<typeof createTmpHome>;
+  beforeEach(() => { tmp = createTmpHome(); });
+  afterEach(() => { tmp.cleanup(); });
 
   it('startup suppresses launch when snoozed (re-fire)', () => {
-    // First startup: creates session file (simulates original session start)
-    runHook('startup', { HOME: tmpHome });
-    // Now create snooze file (user ran /snooze mid-session)
-    writeFileSync(join(tmpHome, '.icc', `watcher.${instanceName}.snoozed`), new Date().toISOString());
-    // Second startup: re-fire (/clear) — should detect session file and preserve snooze
-    const stdout = runHook('startup', { HOME: tmpHome });
+    runHook('startup', { HOME: tmp.tmpHome });
+    writeFileSync(join(tmp.tmpHome, '.icc', `watcher.${instanceName}.snoozed`), new Date().toISOString());
+    const stdout = runHook('startup', { HOME: tmp.tmpHome });
     assert.ok(stdout.includes('[ICC] Watcher snoozed'), 'should report snoozed');
     assert.ok(!stdout.includes('[ICC] Start mail watcher'), 'should NOT trigger launch');
   });
 
   it('startup clears stale snooze on fresh session (no session file)', () => {
-    // Create snooze file but NO session file → fresh session → clear snooze
-    writeFileSync(join(tmpHome, '.icc', `watcher.${instanceName}.snoozed`), new Date().toISOString());
-    const stdout = runHook('startup', { HOME: tmpHome });
+    writeFileSync(join(tmp.tmpHome, '.icc', `watcher.${instanceName}.snoozed`), new Date().toISOString());
+    const stdout = runHook('startup', { HOME: tmp.tmpHome });
     assert.ok(stdout.includes('[ICC] Start mail watcher'), 'should trigger launch after clearing stale snooze');
     assert.ok(!stdout.includes('[ICC] Watcher snoozed'), 'should NOT report snoozed');
-    const snoozePath = join(tmpHome, '.icc', `watcher.${instanceName}.snoozed`);
+    const snoozePath = join(tmp.tmpHome, '.icc', `watcher.${instanceName}.snoozed`);
     assert.ok(!existsSync(snoozePath), 'stale snooze file should be deleted');
   });
 });
 
 describe('Snooze: check respects snooze state', () => {
-  let tmpHome: string;
-
-  beforeEach(() => {
-    tmpHome = mkdtempSync(join(tmpdir(), 'icc-hb-test-'));
-    mkdirSync(join(tmpHome, '.icc'), { recursive: true });
-  });
-
-  afterEach(() => {
-    try { rmSync(tmpHome, { recursive: true, force: true }); } catch {}
-  });
+  let tmp: ReturnType<typeof createTmpHome>;
+  beforeEach(() => { tmp = createTmpHome(); });
+  afterEach(() => { tmp.cleanup(); });
 
   it('check suppresses watcher-not-running when snoozed', () => {
-    // Create snooze file, no heartbeat or PID file
-    writeFileSync(join(tmpHome, '.icc', `watcher.${instanceName}.snoozed`), new Date().toISOString());
-    const stdout = runHook('check', { HOME: tmpHome });
+    writeFileSync(join(tmp.tmpHome, '.icc', `watcher.${instanceName}.snoozed`), new Date().toISOString());
+    const stdout = runHook('check', { HOME: tmp.tmpHome });
     assert.ok(!stdout.includes('[ICC] Watcher not running'), 'should NOT report watcher not running when snoozed');
   });
 });
 
 describe('Snooze: session-end cleans up snooze file', () => {
-  let tmpHome: string;
-
-  beforeEach(() => {
-    tmpHome = mkdtempSync(join(tmpdir(), 'icc-hb-test-'));
-    mkdirSync(join(tmpHome, '.icc'), { recursive: true });
-  });
-
-  afterEach(() => {
-    try { rmSync(tmpHome, { recursive: true, force: true }); } catch {}
-  });
+  let tmp: ReturnType<typeof createTmpHome>;
+  beforeEach(() => { tmp = createTmpHome(); });
+  afterEach(() => { tmp.cleanup(); });
 
   it('session-end removes snooze file', () => {
-    writeFileSync(join(tmpHome, '.icc', `watcher.${instanceName}.snoozed`), new Date().toISOString());
-    runHook('session-end', { HOME: tmpHome });
-    const snoozePath = join(tmpHome, '.icc', `watcher.${instanceName}.snoozed`);
+    writeFileSync(join(tmp.tmpHome, '.icc', `watcher.${instanceName}.snoozed`), new Date().toISOString());
+    runHook('session-end', { HOME: tmp.tmpHome });
+    const snoozePath = join(tmp.tmpHome, '.icc', `watcher.${instanceName}.snoozed`);
     assert.ok(!existsSync(snoozePath), 'snooze file should be deleted on session-end');
   });
 });
 
 describe('Instance-specific blocking', () => {
-  let tmpHome: string;
-
-  beforeEach(() => {
-    tmpHome = mkdtempSync(join(tmpdir(), 'icc-hb-test-'));
-    mkdirSync(join(tmpHome, '.icc'), { recursive: true });
-  });
-
-  afterEach(() => {
-    try { rmSync(tmpHome, { recursive: true, force: true }); } catch {}
-  });
+  let tmp: ReturnType<typeof createTmpHome>;
+  beforeEach(() => { tmp = createTmpHome(); });
+  afterEach(() => { tmp.cleanup(); });
 
   it('other instance watcher does not block this instance', () => {
-    // Create a PID file for a DIFFERENT instance with a live PID (PID 1 = init, always alive)
-    writeFileSync(join(tmpHome, '.icc', 'watcher.other-project.pid'), '1');
-    writeFileSync(join(tmpHome, '.icc', 'watcher.other-project.heartbeat'), new Date().toISOString());
+    writeFileSync(join(tmp.tmpHome, '.icc', 'watcher.other-project.pid'), '1');
+    writeFileSync(join(tmp.tmpHome, '.icc', 'watcher.other-project.heartbeat'), new Date().toISOString());
 
-    // This instance's watcher should start despite other instance having an active watcher
-    const stdout = runHook('watch', { HOME: tmpHome }, ['--timeout', '1', '--interval', '1']);
+    const stdout = runHook('watch', { HOME: tmp.tmpHome }, ['--timeout', '1', '--interval', '1']);
     assert.ok(stdout.includes('[ICC] Watcher cycled'), 'should run watcher despite other instance having one');
     assert.ok(!stdout.includes('already active'), 'should NOT report already active');
   });
 });
 
 describe('Hook: subagent-context', () => {
-  let tmpHome: string;
-
-  beforeEach(() => {
-    tmpHome = mkdtempSync(join(tmpdir(), 'icc-hb-test-'));
-    mkdirSync(join(tmpHome, '.icc'), { recursive: true });
-  });
-
-  afterEach(() => {
-    try { rmSync(tmpHome, { recursive: true, force: true }); } catch {}
-  });
+  let tmp: ReturnType<typeof createTmpHome>;
+  beforeEach(() => { tmp = createTmpHome(); });
+  afterEach(() => { tmp.cleanup(); });
 
   it('outputs JSON with additionalContext for SubagentStart', () => {
-    const stdout = runHook('subagent-context', { HOME: tmpHome });
+    const stdout = runHook('subagent-context', { HOME: tmp.tmpHome });
     const parsed = JSON.parse(stdout);
     assert.equal(parsed.hookSpecificOutput.hookEventName, 'SubagentStart');
     assert.ok(parsed.hookSpecificOutput.additionalContext.includes('Do NOT launch'));

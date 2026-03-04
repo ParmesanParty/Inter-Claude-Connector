@@ -1,11 +1,12 @@
-import { describe, it, before, after, beforeEach } from 'node:test';
+import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, writeFileSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { createServer, request as httpRequest, type Server } from 'node:http';
+import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { clearConfigCache } from '../src/config.ts';
+import { httpJSON } from './helpers.ts';
 
 const testDir = mkdtempSync(join(tmpdir(), 'icc-enroll-test-'));
 const caDir = join(testDir, 'ca-tls');
@@ -21,30 +22,6 @@ after(() => {
   rmSync(testDir, { recursive: true, force: true });
 });
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-function httpReq(port: number, method: string, path: string, body: any = null): Promise<{ status: number | undefined; data: any }> {
-  return new Promise((resolve, reject) => {
-    const payload = body ? JSON.stringify(body) : null;
-    const req = httpRequest(`http://127.0.0.1:${port}${path}`, {
-      method,
-      headers: payload ? { 'Content-Type': 'application/json' } : {},
-    }, (res) => {
-      let data = '';
-      res.on('data', (chunk: string) => { data += chunk; });
-      res.on('end', () => {
-        try {
-          resolve({ status: res.statusCode, data: JSON.parse(data) });
-        } catch {
-          resolve({ status: res.statusCode, data });
-        }
-      });
-    });
-    req.on('error', reject);
-    if (payload) req.write(payload);
-    req.end();
-  });
-}
-
 describe('Enrollment Server', () => {
   let enrollServer: { start(): Promise<{ port: number; host: string }>; stop(): Promise<void>; _server: Server };
   let enrollPort: number;
@@ -52,11 +29,9 @@ describe('Enrollment Server', () => {
   let peerPort: number;
 
   before(async () => {
-    // Initialize CA
     const { initCA } = await import('../src/tls.ts');
     initCA(caDir);
 
-    // Set up config so CA knows about the peer
     process.env.ICC_IDENTITY = 'ca-host';
     clearConfigCache();
   });
@@ -64,10 +39,8 @@ describe('Enrollment Server', () => {
   it('POST /enroll returns challenge for known peer', async () => {
     const { createEnrollmentServer } = await import('../src/enroll.ts');
 
-    // Mock peer config: CA needs to know the peer's httpUrl
-    const peerConfigs: Record<string, { httpUrl: string }> = { 'test-peer': { httpUrl: '' } }; // will set after peer server starts
+    const peerConfigs: Record<string, { httpUrl: string }> = { 'test-peer': { httpUrl: '' } };
 
-    // Start a fake peer ICC server that serves the challenge
     peerServer = createServer((req, res) => {
       if (req.url === '/.well-known/icc-challenge') {
         const challengePath = join(peerChallengeDir, '.challenge');
@@ -96,7 +69,7 @@ describe('Enrollment Server', () => {
     servers.push(enrollServer._server);
 
     // Step 1: POST /enroll
-    const enrollRes = await httpReq(enrollPort, 'POST', '/enroll', { identity: 'test-peer' });
+    const enrollRes = await httpJSON(enrollPort, 'POST', '/enroll', { identity: 'test-peer' });
     assert.equal(enrollRes.status, 200);
     assert.ok(enrollRes.data.enrollmentId);
     assert.ok(enrollRes.data.challenge);
@@ -109,7 +82,7 @@ describe('Enrollment Server', () => {
     const { generateKeyAndCSR } = await import('../src/tls.ts');
     const csr = generateKeyAndCSR(peerChallengeDir, 'test-peer');
 
-    const csrRes = await httpReq(enrollPort, 'POST', '/enroll/csr', {
+    const csrRes = await httpJSON(enrollPort, 'POST', '/enroll/csr', {
       enrollmentId: enrollRes.data.enrollmentId,
       csr,
     });
@@ -119,12 +92,12 @@ describe('Enrollment Server', () => {
   });
 
   it('POST /enroll rejects unknown peer', async () => {
-    const res = await httpReq(enrollPort, 'POST', '/enroll', { identity: 'unknown-host' });
+    const res = await httpJSON(enrollPort, 'POST', '/enroll', { identity: 'unknown-host' });
     assert.equal(res.status, 403);
   });
 
   it('POST /enroll/csr rejects invalid enrollmentId', async () => {
-    const res = await httpReq(enrollPort, 'POST', '/enroll/csr', {
+    const res = await httpJSON(enrollPort, 'POST', '/enroll/csr', {
       enrollmentId: 'bogus-id',
       csr: 'not-a-real-csr',
     });
@@ -132,7 +105,6 @@ describe('Enrollment Server', () => {
   });
 
   it('should rate-limit enrollment to 3 per identity per 15 min', async () => {
-    // Create a fresh enrollment server with a known peer for rate limit testing
     const { createEnrollmentServer } = await import('../src/enroll.ts');
     const rlPeerConfigs: Record<string, { httpUrl: string }> = {
       'rl-peer': { httpUrl: 'http://127.0.0.1:9999' },
@@ -141,14 +113,12 @@ describe('Enrollment Server', () => {
     const rlInfo = await rlServer.start();
     servers.push(rlServer._server);
 
-    // First 3 requests should return 200
     for (let i = 0; i < 3; i++) {
-      const res = await httpReq(rlInfo.port, 'POST', '/enroll', { identity: 'rl-peer' });
+      const res = await httpJSON(rlInfo.port, 'POST', '/enroll', { identity: 'rl-peer' });
       assert.equal(res.status, 200, `Request ${i + 1} should succeed`);
     }
 
-    // 4th request should be rate-limited
-    const res4 = await httpReq(rlInfo.port, 'POST', '/enroll', { identity: 'rl-peer' });
+    const res4 = await httpJSON(rlInfo.port, 'POST', '/enroll', { identity: 'rl-peer' });
     assert.equal(res4.status, 429);
 
     await rlServer.stop();

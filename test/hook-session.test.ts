@@ -1,47 +1,21 @@
 import { describe, it, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, existsSync, mkdirSync, readdirSync, writeFileSync, rmSync } from 'node:fs';
+import { readFileSync, existsSync, readdirSync, writeFileSync } from 'node:fs';
 import { join, basename } from 'node:path';
-import { tmpdir } from 'node:os';
-import { execFileSync } from 'node:child_process';
 import { sanitize } from '../src/instances.ts';
+import { runHook, createTmpHome } from './helpers.ts';
 
-const iccBin = join(import.meta.dirname, '..', 'bin', 'icc.ts');
 const instanceName = sanitize(basename(process.cwd()));
 
-function runHook(subcmd: string, env: Record<string, string> = {}, extraArgs: string[] = []): string {
-  return execFileSync('node', [iccBin, 'hook', subcmd, ...extraArgs], {
-    env: {
-      ...process.env,
-      HOME: env.HOME || process.env.HOME,
-      ICC_IDENTITY: 'test-host',
-      ICC_AUTH_TOKEN: 'test-token',
-      ICC_REMOTE_SSH: '',
-      ICC_REMOTE_HTTP: '',
-      ...env,
-    },
-    timeout: 10000,
-    encoding: 'utf-8',
-    stdio: ['pipe', 'pipe', 'pipe'],
-  });
-}
-
 describe('Session instance: startup writes session file', () => {
-  let tmpHome: string;
-
-  beforeEach(() => {
-    tmpHome = mkdtempSync(join(tmpdir(), 'icc-session-test-'));
-    mkdirSync(join(tmpHome, '.icc'), { recursive: true });
-  });
-
-  afterEach(() => {
-    try { rmSync(tmpHome, { recursive: true, force: true }); } catch {}
-  });
+  let tmp: ReturnType<typeof createTmpHome>;
+  beforeEach(() => { tmp = createTmpHome(); });
+  afterEach(() => { tmp.cleanup(); });
 
   it('startup creates a session.<pid>.instance file', () => {
-    runHook('startup', { HOME: tmpHome });
+    runHook('startup', { HOME: tmp.tmpHome });
 
-    const iccDir = join(tmpHome, '.icc');
+    const iccDir = join(tmp.tmpHome, '.icc');
     const sessionFiles = readdirSync(iccDir).filter(
       f => f.startsWith('session.') && f.endsWith('.instance')
     );
@@ -53,56 +27,36 @@ describe('Session instance: startup writes session file', () => {
 });
 
 describe('Session instance: check uses session file', () => {
-  let tmpHome: string;
-
-  beforeEach(() => {
-    tmpHome = mkdtempSync(join(tmpdir(), 'icc-session-test-'));
-    mkdirSync(join(tmpHome, '.icc'), { recursive: true });
-  });
-
-  afterEach(() => {
-    try { rmSync(tmpHome, { recursive: true, force: true }); } catch {}
-  });
+  let tmp: ReturnType<typeof createTmpHome>;
+  beforeEach(() => { tmp = createTmpHome(); });
+  afterEach(() => { tmp.cleanup(); });
 
   it('check reads instance name from session file when present', () => {
-    // Run startup first to create the session file
-    runHook('startup', { HOME: tmpHome });
+    runHook('startup', { HOME: tmp.tmpHome });
 
-    // Write a heartbeat under the session instance name so check is silent
-    const iccDir = join(tmpHome, '.icc');
+    const iccDir = join(tmp.tmpHome, '.icc');
     writeFileSync(join(iccDir, `watcher.${instanceName}.heartbeat`), new Date().toISOString());
 
-    // Check should NOT report "Watcher not running" because the heartbeat
-    // matches the session instance name
-    const stdout = runHook('check', { HOME: tmpHome });
+    const stdout = runHook('check', { HOME: tmp.tmpHome });
     assert.ok(!stdout.includes('[ICC] Watcher not running'),
       'check should use session instance name and find the heartbeat');
   });
 });
 
 describe('Session instance: session-end cleans up session file', () => {
-  let tmpHome: string;
-
-  beforeEach(() => {
-    tmpHome = mkdtempSync(join(tmpdir(), 'icc-session-test-'));
-    mkdirSync(join(tmpHome, '.icc'), { recursive: true });
-  });
-
-  afterEach(() => {
-    try { rmSync(tmpHome, { recursive: true, force: true }); } catch {}
-  });
+  let tmp: ReturnType<typeof createTmpHome>;
+  beforeEach(() => { tmp = createTmpHome(); });
+  afterEach(() => { tmp.cleanup(); });
 
   it('session-end deletes the session file', () => {
-    // Create session file via startup
-    runHook('startup', { HOME: tmpHome });
-    const iccDir = join(tmpHome, '.icc');
+    runHook('startup', { HOME: tmp.tmpHome });
+    const iccDir = join(tmp.tmpHome, '.icc');
     let sessionFiles = readdirSync(iccDir).filter(
       f => f.startsWith('session.') && f.endsWith('.instance')
     );
     assert.equal(sessionFiles.length, 1, 'session file should exist after startup');
 
-    // Run session-end to clean up
-    runHook('session-end', { HOME: tmpHome });
+    runHook('session-end', { HOME: tmp.tmpHome });
     sessionFiles = readdirSync(iccDir).filter(
       f => f.startsWith('session.') && f.endsWith('.instance')
     );
@@ -111,34 +65,25 @@ describe('Session instance: session-end cleans up session file', () => {
 });
 
 describe('Session instance: startup cleans stale session files', () => {
-  let tmpHome: string;
-
-  beforeEach(() => {
-    tmpHome = mkdtempSync(join(tmpdir(), 'icc-session-test-'));
-    mkdirSync(join(tmpHome, '.icc'), { recursive: true });
-  });
-
-  afterEach(() => {
-    try { rmSync(tmpHome, { recursive: true, force: true }); } catch {}
-  });
+  let tmp: ReturnType<typeof createTmpHome>;
+  beforeEach(() => { tmp = createTmpHome(); });
+  afterEach(() => { tmp.cleanup(); });
 
   it('removes session files for dead PIDs', () => {
-    const iccDir = join(tmpHome, '.icc');
-    // Create a fake session file with a non-existent PID
+    const iccDir = join(tmp.tmpHome, '.icc');
     writeFileSync(join(iccDir, 'session.999999.instance'), 'stale-instance');
 
-    runHook('startup', { HOME: tmpHome });
+    runHook('startup', { HOME: tmp.tmpHome });
 
     assert.ok(!existsSync(join(iccDir, 'session.999999.instance')),
       'stale session file should be cleaned up');
   });
 
   it('preserves session files for live PIDs', () => {
-    const iccDir = join(tmpHome, '.icc');
-    // Create a session file with the current process PID (which is alive)
+    const iccDir = join(tmp.tmpHome, '.icc');
     writeFileSync(join(iccDir, `session.${process.pid}.instance`), 'live-instance');
 
-    runHook('startup', { HOME: tmpHome });
+    runHook('startup', { HOME: tmp.tmpHome });
 
     assert.ok(existsSync(join(iccDir, `session.${process.pid}.instance`)),
       'session file for live PID should be preserved');
@@ -146,22 +91,12 @@ describe('Session instance: startup cleans stale session files', () => {
 });
 
 describe('Session instance: fallback when no session file exists', () => {
-  let tmpHome: string;
-
-  beforeEach(() => {
-    tmpHome = mkdtempSync(join(tmpdir(), 'icc-session-test-'));
-    mkdirSync(join(tmpHome, '.icc'), { recursive: true });
-  });
-
-  afterEach(() => {
-    try { rmSync(tmpHome, { recursive: true, force: true }); } catch {}
-  });
+  let tmp: ReturnType<typeof createTmpHome>;
+  beforeEach(() => { tmp = createTmpHome(); });
+  afterEach(() => { tmp.cleanup(); });
 
   it('check falls back to cwd-derived name when no session file exists', () => {
-    // Don't run startup — no session file will exist
-    // check should still work, falling back to resolveInstance(cwd)
-    const stdout = runHook('check', { HOME: tmpHome });
-    // With no heartbeat and no watcher, should report not running
+    const stdout = runHook('check', { HOME: tmp.tmpHome });
     assert.ok(stdout.includes('[ICC] Watcher not running'),
       'should fall back to cwd-derived instance name and detect missing watcher');
   });

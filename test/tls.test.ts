@@ -4,6 +4,7 @@ import { mkdtempSync, readFileSync, existsSync, rmSync, writeFileSync, copyFileS
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { clearConfigCache } from '../src/config.ts';
+import { withEnv } from './helpers.ts';
 
 const testDir = mkdtempSync(join(tmpdir(), 'icc-tls-test-'));
 
@@ -79,51 +80,47 @@ describe('HTTPS Server', () => {
     writeFileSync(join(peerDir, 'server.crt'), cert);
     copyFileSync(join(caDir, 'ca.crt'), join(peerDir, 'ca.crt'));
 
-    process.env.ICC_IDENTITY = 'test-host';
-    process.env.ICC_AUTH_TOKEN = '';
-    process.env.ICC_TLS_ENABLED = 'true';
-    process.env.ICC_TLS_CERT = join(peerDir, 'server.crt');
-    process.env.ICC_TLS_KEY = join(peerDir, 'server.key');
-    process.env.ICC_TLS_CA = join(peerDir, 'ca.crt');
-    clearConfigCache();
-
-    const { createICCServer } = await import('../src/server.ts');
-    const { reset: resetLog } = await import('../src/log.ts');
-    const { reset: resetInbox, init: initInbox } = await import('../src/inbox.ts');
-    resetLog(testDir);
-    resetInbox(testDir);
-    initInbox();
-
-    const s = createICCServer({ host: '127.0.0.1', port: 0, noAuth: true });
-    const info = await s.start();
-
-    try {
-      const { request: httpsReq } = await import('node:https');
-      const res = await new Promise<{ status: string }>((resolve, reject) => {
-        const req = httpsReq(`https://127.0.0.1:${info.port}/api/health`, {
-          ca: readFileSync(join(peerDir, 'ca.crt')),
-          cert: readFileSync(join(peerDir, 'server.crt')),
-          key: readFileSync(join(peerDir, 'server.key')),
-          // Skip hostname verification — test certs don't include IP SANs;
-          // we're testing mTLS (mutual cert auth), not hostname matching
-          checkServerIdentity: () => undefined,
-        }, (httpRes) => {
-          let data = '';
-          httpRes.on('data', (c: string) => { data += c; });
-          httpRes.on('end', () => resolve(JSON.parse(data)));
-        });
-        req.on('error', reject);
-        req.end();
-      });
-
-      assert.equal(res.status, 'ok');
-    } finally {
-      for (const k of ['ICC_TLS_ENABLED', 'ICC_TLS_CERT', 'ICC_TLS_KEY', 'ICC_TLS_CA']) {
-        delete process.env[k];
-      }
+    await withEnv({
+      ICC_IDENTITY: 'test-host',
+      ICC_AUTH_TOKEN: '',
+      ICC_TLS_ENABLED: 'true',
+      ICC_TLS_CERT: join(peerDir, 'server.crt'),
+      ICC_TLS_KEY: join(peerDir, 'server.key'),
+      ICC_TLS_CA: join(peerDir, 'ca.crt'),
+    }, async () => {
       clearConfigCache();
-      await s.stop();
-    }
+      const { createICCServer } = await import('../src/server.ts');
+      const { reset: resetLog } = await import('../src/log.ts');
+      const { reset: resetInbox, init: initInbox } = await import('../src/inbox.ts');
+      resetLog(testDir);
+      resetInbox(testDir);
+      initInbox();
+
+      const s = createICCServer({ host: '127.0.0.1', port: 0, noAuth: true });
+      const info = await s.start();
+
+      try {
+        const { request: httpsReq } = await import('node:https');
+        const res = await new Promise<{ status: string }>((resolve, reject) => {
+          const req = httpsReq(`https://127.0.0.1:${info.port}/api/health`, {
+            ca: readFileSync(join(peerDir, 'ca.crt')),
+            cert: readFileSync(join(peerDir, 'server.crt')),
+            key: readFileSync(join(peerDir, 'server.key')),
+            checkServerIdentity: () => undefined,
+          }, (httpRes) => {
+            let data = '';
+            httpRes.on('data', (c: string) => { data += c; });
+            httpRes.on('end', () => resolve(JSON.parse(data)));
+          });
+          req.on('error', reject);
+          req.end();
+        });
+
+        assert.equal(res.status, 'ok');
+      } finally {
+        await s.stop();
+      }
+    });
   });
 });
 
@@ -145,65 +142,60 @@ describe('End-to-end mTLS', () => {
     writeFileSync(join(peerDir, 'server.crt'), cert);
     copyFileSync(join(caDir, 'ca.crt'), join(peerDir, 'ca.crt'));
 
-    process.env.ICC_IDENTITY = 'e2e-peer';
-    process.env.ICC_AUTH_TOKEN = '';
-    process.env.ICC_TLS_ENABLED = 'true';
-    process.env.ICC_TLS_CERT = join(peerDir, 'server.crt');
-    process.env.ICC_TLS_KEY = join(peerDir, 'server.key');
-    process.env.ICC_TLS_CA = join(peerDir, 'ca.crt');
-    clearConfigCache();
+    await withEnv({
+      ICC_IDENTITY: 'e2e-peer',
+      ICC_AUTH_TOKEN: '',
+      ICC_TLS_ENABLED: 'true',
+      ICC_TLS_CERT: join(peerDir, 'server.crt'),
+      ICC_TLS_KEY: join(peerDir, 'server.key'),
+      ICC_TLS_CA: join(peerDir, 'ca.crt'),
+    }, async () => {
+      clearConfigCache();
+      const { createICCServer } = await import('../src/server.ts');
+      const { reset: resetLog } = await import('../src/log.ts');
+      const { reset: resetInbox, init: initInbox } = await import('../src/inbox.ts');
+      resetLog(testDir);
+      resetInbox(testDir);
+      initInbox();
 
-    const { createICCServer } = await import('../src/server.ts');
-    const { reset: resetLog } = await import('../src/log.ts');
-    const { reset: resetInbox, init: initInbox } = await import('../src/inbox.ts');
-    resetLog(testDir);
-    resetInbox(testDir);
-    initInbox();
+      const s = createICCServer({ host: '127.0.0.1', port: 0, noAuth: true });
+      const info = await s.start();
 
-    const s = createICCServer({ host: '127.0.0.1', port: 0, noAuth: true });
-    const info = await s.start();
+      try {
+        const { request: httpsReq } = await import('node:https');
 
-    try {
-      const { request: httpsReq } = await import('node:https');
-
-      // mTLS request with valid client cert → should succeed
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const res = await new Promise<{ status: number | undefined; data: any }>((resolve, reject) => {
-        const req = httpsReq(`https://127.0.0.1:${info.port}/api/health`, {
-          ca: readFileSync(join(peerDir, 'ca.crt')),
-          cert: readFileSync(join(peerDir, 'server.crt')),
-          key: readFileSync(join(peerDir, 'server.key')),
-          checkServerIdentity: () => undefined,
-        }, (httpRes) => {
-          let data = '';
-          httpRes.on('data', (c: string) => { data += c; });
-          httpRes.on('end', () => resolve({ status: httpRes.statusCode, data: JSON.parse(data) }));
-        });
-        req.on('error', reject);
-        req.end();
-      });
-
-      assert.equal(res.status, 200);
-      assert.equal(res.data.status, 'ok');
-
-      // Request WITHOUT client cert → should be rejected by mTLS
-      await assert.rejects(
-        new Promise((resolve, reject) => {
+        const res = await new Promise<{ status: number | undefined; data: any }>((resolve, reject) => {
           const req = httpsReq(`https://127.0.0.1:${info.port}/api/health`, {
             ca: readFileSync(join(peerDir, 'ca.crt')),
+            cert: readFileSync(join(peerDir, 'server.crt')),
+            key: readFileSync(join(peerDir, 'server.key')),
             checkServerIdentity: () => undefined,
-          }, resolve);
+          }, (httpRes) => {
+            let data = '';
+            httpRes.on('data', (c: string) => { data += c; });
+            httpRes.on('end', () => resolve({ status: httpRes.statusCode, data: JSON.parse(data) }));
+          });
           req.on('error', reject);
           req.end();
-        }),
-        /ECONNRESET|certificate|socket hang up/
-      );
-    } finally {
-      for (const k of ['ICC_TLS_ENABLED', 'ICC_TLS_CERT', 'ICC_TLS_KEY', 'ICC_TLS_CA', 'ICC_AUTH_TOKEN', 'ICC_IDENTITY']) {
-        delete process.env[k];
+        });
+
+        assert.equal(res.status, 200);
+        assert.equal(res.data.status, 'ok');
+
+        await assert.rejects(
+          new Promise((resolve, reject) => {
+            const req = httpsReq(`https://127.0.0.1:${info.port}/api/health`, {
+              ca: readFileSync(join(peerDir, 'ca.crt')),
+              checkServerIdentity: () => undefined,
+            }, resolve);
+            req.on('error', reject);
+            req.end();
+          }),
+          /ECONNRESET|certificate|socket hang up/
+        );
+      } finally {
+        await s.stop();
       }
-      clearConfigCache();
-      await s.stop();
-    }
+    });
   });
 });
