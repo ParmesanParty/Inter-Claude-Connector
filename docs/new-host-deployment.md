@@ -4,6 +4,39 @@ Step-by-step guide for joining the ICC mesh as a new peer. All commands
 are run locally on the new host — ICC's philosophy is that each host
 controls itself.
 
+## Quick Onboarding (Recommended)
+
+If the CA host is online and has the enrollment server running, the
+entire process is two commands:
+
+**On the CA host:**
+
+```bash
+icc invite <new-host-identity> --ip <new-host-ip>
+# Prints a join command with a one-time token (valid 15 minutes)
+```
+
+**On the new host** (after steps 1-3 below):
+
+```bash
+icc join <ca-url> <join-token> --identity <your-identity> --ip <your-ip>
+```
+
+This automatically:
+- Generates an Ed25519 keypair and CSR
+- Authenticates with the join token
+- Gets a CA-signed certificate
+- Configures TLS, peer tokens, and CA identity
+- Pushes mesh updates to all existing peers
+
+After `icc join` completes, start the server and configure Claude Code
+(steps 5 and 7 below).
+
+---
+
+For manual setup (CA offline, or advanced configuration), follow all
+steps below.
+
 ## Prerequisites
 
 - The new host's hostname or IP must be reachable from existing peers
@@ -68,9 +101,9 @@ and service files.
 icc init --identity <your-identity>
 ```
 
-This generates `~/.icc/config.json` with a `localToken` (for MCP/hooks)
-and a legacy `authToken`. Choose an identity that's short and memorable
-(e.g. `laptop`, `server`, `desktop`).
+This generates `~/.icc/config.json` with a `localToken` (for MCP/hooks).
+Choose an identity that's short and memorable (e.g. `laptop`, `server`,
+`desktop`).
 
 ### 4b. Exchange per-peer auth tokens
 
@@ -103,8 +136,6 @@ Add each peer to your config:
 
 ```bash
 icc config --set remotes.<peer>.httpUrl=https://<peer-ip>:3179
-icc config --set remotes.<peer>.sshHost=<peer-hostname>
-icc config --set remotes.<peer>.projectDir=~/code/inter-claude-connector
 ```
 
 Optionally enable remote file read and command execution:
@@ -261,8 +292,8 @@ The CA operator must do two things before you can enroll:
   WHO we're talking to, not what IP they're on.
 
 - **Chicken-and-egg problem:** When enabling mTLS, HTTP connections
-  break for peers that haven't switched yet. The SSH fallback transport
-  covers the gap. Enable TLS on all hosts, then restart them together.
+  break for peers that haven't switched yet. Enable TLS on all hosts,
+  then restart them together. Using `icc join` avoids this entirely.
 
 - **Enrollment server stays HTTP:** The enrollment server (port 4179)
   is intentionally plain HTTP — it's only used for initial cert
@@ -378,8 +409,11 @@ If a watcher launch returns `[ICC] Watcher already active`, do nothing.
 
 ## 8. Coordinate with Existing Peers
 
-Every existing peer needs your identity added to their `remotes`. Send
-each peer operator the following information:
+**If you used `icc join`:** This step is automatic — the CA pushes
+mesh updates to all existing peers with bidirectional auth tokens.
+
+**If you used manual setup:** Every existing peer needs your identity
+added to their `remotes`. Send each peer operator:
 
 - Your identity name
 - Your IP address or hostname
@@ -389,8 +423,6 @@ They will run on their end:
 
 ```bash
 icc config --set remotes.<your-identity>.httpUrl=https://<your-ip>:3179
-icc config --set remotes.<your-identity>.sshHost=<your-hostname>
-icc config --set remotes.<your-identity>.projectDir=~/code/inter-claude-connector
 icc config --set remotes.<your-identity>.token=<token-you-gave-them>
 systemctl --user restart icc-server
 ```
@@ -459,14 +491,9 @@ icc tls serve              # Start enrollment server (runs as systemd)
 
 ## Known Limitations
 
-- **SSH reverse direction:** A new host may not have SSH keys for
-  existing hosts. HTTP transport works without SSH. Set up SSH keys
-  separately if SSH fallback is needed.
-- **claude -p timeouts:** The `icc send` command invokes `claude -p` on
-  the remote, which can timeout under load. Inbox messaging
-  (`send_message`) is unaffected.
 - **Server cert expiry:** Server certs are valid for 1 year.
   Re-enrollment (`icc tls enroll --ca <ca-host>`) regenerates the keypair
   and cert. The CA cert is valid for 10 years.
-- **Web UI and mTLS:** Browsers can't do mTLS (no client certs), so the
-  web UI may need a proxy or separate endpoint for browser access.
+- **Web UI binds to localhost:** The web UI defaults to `127.0.0.1` and
+  requires session auth with the `localToken`. Access from other machines
+  requires a reverse proxy or SSH tunnel.

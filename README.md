@@ -15,7 +15,7 @@ ICC lets Claude Code sessions on different machines talk to each other:
   across the mesh
 
 Communication happens over HTTPS with mutual TLS. Claude Code integrates via
-[MCP](https://modelcontextprotocol.io/) (8 tools) and lifecycle hooks.
+[MCP](https://modelcontextprotocol.io/) (10 tools) and lifecycle hooks.
 
 ## Architecture
 
@@ -40,6 +40,8 @@ Communication happens over HTTPS with mutual TLS. Claude Code integrates via
   No shared secrets.
 - **HTTPS/mTLS** — all peer communication uses mutual TLS with
   Ed25519 certificates.
+- **CA-mediated provisioning** — new hosts join via `icc invite`/`icc join`,
+  which handles cert enrollment, token exchange, and mesh updates automatically.
 - **PID-based liveness** — the server prunes stale instance registrations
   by checking process liveness.
 
@@ -65,10 +67,11 @@ sudo npm link   # makes `icc` CLI available system-wide
 icc init --identity <your-hostname>
 ```
 
-This creates `~/.icc/config.json` with auth tokens. See
-[Deploying to a New Host](docs/new-host-deployment.md) for the full
-setup guide including peer configuration, TLS enrollment, systemd
-services, and Claude Code integration.
+This creates `~/.icc/config.json` with a local auth token. To join an
+existing mesh, the CA host runs `icc invite <identity>` and provides a
+join command. See [Deploying to a New Host](docs/new-host-deployment.md)
+for the full setup guide including manual peer configuration, TLS
+enrollment, systemd services, and Claude Code integration.
 
 ### Run
 
@@ -93,12 +96,14 @@ icc config   [--set key=value]         Show or edit configuration
 icc hook     <subcommand>              Claude Code lifecycle hooks
 icc instance <subcommand>              Manage persistent instance names
 icc tls      <subcommand>              TLS certificate management
+icc invite   <identity> --ip <ip>     Generate join token for a new host (CA only)
+icc join     <ca-url> <token>         Join the mesh using an invite token
 icc help                               Show usage
 ```
 
 ## MCP Tools
 
-ICC exposes 8 tools to Claude Code via MCP:
+ICC exposes 10 tools to Claude Code via MCP:
 
 | Tool | Type | Description |
 |------|------|-------------|
@@ -141,15 +146,22 @@ rendering.
   certificates. Identity is verified by certificate CN, not
   hostname/IP.
 - **Per-peer tokens** — Separate inbound and outbound auth tokens for
-  each host pair.
+  each host pair. No legacy shared secrets.
+- **Auth required** — The server refuses to start without auth tokens
+  configured (use `--no-auth` for development).
+- **CORS restriction** — Only configured origins are allowed, not
+  wildcard.
+- **Web UI auth** — Session-based authentication with the local token;
+  binds to localhost by default.
 - **Opt-in remote ops** — File read and command execution are disabled
   by default. Enable with `security.readfileEnabled` and
   `security.execEnabled`.
 - **Path and command allowlists** — Remote operations are restricted to
-  configured paths and commands.
+  configured paths and read-only commands.
 
-TLS certificates are provisioned via an HTTP-01 enrollment protocol.
-See [deployment docs](docs/new-host-deployment.md#6-tls-certificate-enrollment).
+TLS certificates are provisioned via an HTTP-01 enrollment protocol,
+or automatically via `icc invite`/`icc join`.
+See [deployment docs](docs/new-host-deployment.md).
 
 ## Configuration
 
@@ -159,8 +171,7 @@ ICC uses layered configuration:
 config/default.json → ~/.icc/config.json → environment variables
 ```
 
-Key environment variables: `ICC_IDENTITY`, `ICC_PORT`, `ICC_AUTH_TOKEN`,
-`ICC_LOCAL_TOKEN`.
+Key environment variables: `ICC_IDENTITY`, `ICC_PORT`, `ICC_LOCAL_TOKEN`.
 
 Show current config (tokens redacted):
 
