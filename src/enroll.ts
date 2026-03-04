@@ -41,6 +41,21 @@ export function createEnrollmentServer(options: EnrollmentOptions): EnrollmentSe
   } = options;
 
   const enrollments = new Map<string, EnrollmentEntry>();
+  const rateLimits = new Map<string, { count: number; resetAt: number }>();
+  const RATE_LIMIT = 3;
+  const RATE_WINDOW = 15 * 60 * 1000; // 15 minutes
+
+  function checkRateLimit(identity: string): boolean {
+    const now = Date.now();
+    const entry = rateLimits.get(identity);
+    if (!entry || now >= entry.resetAt) {
+      rateLimits.set(identity, { count: 1, resetAt: now + RATE_WINDOW });
+      return true;
+    }
+    if (entry.count >= RATE_LIMIT) return false;
+    entry.count++;
+    return true;
+  }
 
   function verifyChallenge(peerHttpUrl: string, expectedToken: string): Promise<boolean> {
     return new Promise((resolve) => {
@@ -82,6 +97,13 @@ export function createEnrollmentServer(options: EnrollmentOptions): EnrollmentSe
         if (!peerConfigs[identity]) {
           log.warn(`Enrollment rejected: unknown peer "${identity}"`);
           sendJSON(res, 403, { error: `Unknown peer: "${identity}". Must be in CA remotes config.` });
+          return;
+        }
+
+        if (!checkRateLimit(identity)) {
+          const retryAfter = Math.ceil(RATE_WINDOW / 1000);
+          res.writeHead(429, { 'Retry-After': String(retryAfter), 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Rate limit exceeded' }));
           return;
         }
 

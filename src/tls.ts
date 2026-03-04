@@ -1,6 +1,7 @@
 import { execFileSync } from 'node:child_process';
-import { readFileSync, writeFileSync, mkdirSync, unlinkSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync, unlinkSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
+import { randomBytes } from 'node:crypto';
 import { createLogger } from './util/logger.ts';
 
 const log = createLogger('tls');
@@ -24,6 +25,10 @@ export function initCA(tlsDir: string, days: number = 3650): void {
     'req', '-new', '-x509', '-key', keyPath, '-out', certPath,
     '-days', String(days), '-subj', '/CN=ICC Root CA',
   ], { stdio: 'pipe' });
+
+  // Initialize serial file with random starting serial
+  const serial = randomBytes(8).toString('hex').toUpperCase();
+  writeFileSync(join(tlsDir, 'ca.srl'), serial + '\n');
 
   log.info(`CA initialized at ${tlsDir}`);
 }
@@ -66,18 +71,25 @@ export function signCSR(tlsDir: string, csrPem: string, identity: string, days: 
   const csrPath = join(tlsDir, '.tmp-csr.pem');
   const outPath = join(tlsDir, '.tmp-cert.pem');
 
+  const srlPath = join(tlsDir, 'ca.srl');
   try {
     writeFileSync(csrPath, csrPem);
+    // Use -CAserial with persistent serial file (initialized by initCA)
+    // Fall back to -CAcreateserial if ca.srl doesn't exist yet
+    const serialArgs = existsSync(srlPath)
+      ? ['-CAserial', srlPath]
+      : ['-CAcreateserial'];
     execFileSync('openssl', [
       'x509', '-req', '-in', csrPath, '-CA', caCertPath, '-CAkey', caKeyPath,
-      '-CAcreateserial', '-out', outPath, '-days', String(days),
+      ...serialArgs, '-out', outPath, '-days', String(days),
     ], { stdio: 'pipe' });
 
     const cert = readFileSync(outPath, 'utf-8');
     log.info(`Signed certificate for "${identity}" (${days} days)`);
     return cert;
   } finally {
-    for (const f of [csrPath, outPath, join(tlsDir, 'ca.srl')]) {
+    // Clean up temp files but preserve ca.srl
+    for (const f of [csrPath, outPath]) {
       try { unlinkSync(f); } catch { /* cleanup */ }
     }
   }

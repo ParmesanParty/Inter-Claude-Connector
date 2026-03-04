@@ -130,4 +130,27 @@ describe('Enrollment Server', () => {
     });
     assert.equal(res.status, 400);
   });
+
+  it('should rate-limit enrollment to 3 per identity per 15 min', async () => {
+    // Create a fresh enrollment server with a known peer for rate limit testing
+    const { createEnrollmentServer } = await import('../src/enroll.ts');
+    const rlPeerConfigs: Record<string, { httpUrl: string }> = {
+      'rl-peer': { httpUrl: 'http://127.0.0.1:9999' },
+    };
+    const rlServer = createEnrollmentServer({ caDir, peerConfigs: rlPeerConfigs, host: '127.0.0.1', port: 0 });
+    const rlInfo = await rlServer.start();
+    servers.push(rlServer._server);
+
+    // First 3 requests should return 200
+    for (let i = 0; i < 3; i++) {
+      const res = await httpReq(rlInfo.port, 'POST', '/enroll', { identity: 'rl-peer' });
+      assert.equal(res.status, 200, `Request ${i + 1} should succeed`);
+    }
+
+    // 4th request should be rate-limited
+    const res4 = await httpReq(rlInfo.port, 'POST', '/enroll', { identity: 'rl-peer' });
+    assert.equal(res4.status, 429);
+
+    await rlServer.stop();
+  });
 });

@@ -45,6 +45,12 @@ describe('TLS crypto module', () => {
       const cert = tls.signCSR(testDir, csr, 'test-peer', 365);
       assert.ok(cert.includes('BEGIN CERTIFICATE'));
     });
+
+    it('preserves ca.srl after signing', () => {
+      const csr = tls.generateKeyAndCSR(testDir, 'test-peer-srl');
+      tls.signCSR(testDir, csr, 'test-peer-srl', 365);
+      assert.ok(existsSync(join(testDir, 'ca.srl')), 'ca.srl should persist after signing');
+    });
   });
 
   describe('getCertInfo', () => {
