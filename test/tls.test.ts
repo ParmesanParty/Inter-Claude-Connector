@@ -82,7 +82,6 @@ describe('HTTPS Server', () => {
 
     await withEnv({
       ICC_IDENTITY: 'test-host',
-      ICC_AUTH_TOKEN: '',
       ICC_TLS_ENABLED: 'true',
       ICC_TLS_CERT: join(peerDir, 'server.crt'),
       ICC_TLS_KEY: join(peerDir, 'server.key'),
@@ -144,7 +143,6 @@ describe('End-to-end mTLS', () => {
 
     await withEnv({
       ICC_IDENTITY: 'e2e-peer',
-      ICC_AUTH_TOKEN: '',
       ICC_TLS_ENABLED: 'true',
       ICC_TLS_CERT: join(peerDir, 'server.crt'),
       ICC_TLS_KEY: join(peerDir, 'server.key'),
