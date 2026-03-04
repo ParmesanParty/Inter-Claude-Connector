@@ -1,7 +1,12 @@
 import { describe, it, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { clearConfigCache } from '../src/config.ts';
+import { mkdtempSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+import { clearConfigCache, resetConfigPath } from '../src/config.ts';
 import type { HTTPTransport } from '../src/transport/http.ts';
+
+resetConfigPath(mkdtempSync(join(tmpdir(), 'icc-transport-test-')));
 
 beforeEach(() => {
   process.env.ICC_IDENTITY = 'test-host';

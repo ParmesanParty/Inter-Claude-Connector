@@ -9,7 +9,7 @@ import type { ICCConfig, RemoteConfig } from './types.ts';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const DEFAULT_CONFIG_PATH = join(__dirname, '..', 'config', 'default.json');
-const USER_CONFIG_PATH = join(homedir(), '.icc', 'config.json');
+let userConfigPath = join(homedir(), '.icc', 'config.json');
 
 let _cachedConfig: ICCConfig | null = null;
 
@@ -59,14 +59,14 @@ export function loadConfig({ reload = false } = {}): ICCConfig {
   let config = readJSON(DEFAULT_CONFIG_PATH) as unknown as ICCConfig;
 
   try {
-    const userConfig = readJSON(USER_CONFIG_PATH);
+    const userConfig = readJSON(userConfigPath);
     config = deepMerge(config as unknown as Record<string, unknown>, userConfig) as unknown as ICCConfig;
     // Warn if config is readable by group/others
     try {
-      const stat = statSync(USER_CONFIG_PATH);
+      const stat = statSync(userConfigPath);
       const mode = stat.mode & 0o777;
       if (mode & 0o077) {
-        console.error(`[ICC] WARNING: ${USER_CONFIG_PATH} is readable by group/others (mode ${mode.toString(8)}). Run: chmod 600 ${USER_CONFIG_PATH}`);
+        console.error(`[ICC] WARNING: ${userConfigPath} is readable by group/others (mode ${mode.toString(8)}). Run: chmod 600 ${userConfigPath}`);
       }
     } catch { /* stat failed — ignore */ }
   } catch {
@@ -79,15 +79,20 @@ export function loadConfig({ reload = false } = {}): ICCConfig {
 }
 
 export function getConfigPath(): string {
-  return USER_CONFIG_PATH;
+  return userConfigPath;
 }
 
 export function writeConfig(config: ICCConfig): void {
-  const dir = join(homedir(), '.icc');
-  mkdirSync(dir, { recursive: true });
-  writeFileSync(USER_CONFIG_PATH, JSON.stringify(config, null, 2) + '\n');
-  try { chmodSync(USER_CONFIG_PATH, 0o600); } catch { /* Windows */ }
+  mkdirSync(dirname(userConfigPath), { recursive: true });
+  writeFileSync(userConfigPath, JSON.stringify(config, null, 2) + '\n');
+  try { chmodSync(userConfigPath, 0o600); } catch { /* Windows */ }
   _cachedConfig = config;
+}
+
+/** Redirect config reads/writes to a temp directory. Call in test setup. */
+export function resetConfigPath(dir: string): void {
+  userConfigPath = join(dir, 'config.json');
+  _cachedConfig = null;
 }
 
 export function getFullAddress(config: ICCConfig): string {

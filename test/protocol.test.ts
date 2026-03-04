@@ -1,10 +1,14 @@
 import { describe, it, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import {
   createPing, createPong,
   validate, serialize, deserialize,
 } from '../src/protocol.ts';
-import { clearConfigCache } from '../src/config.ts';
+import { clearConfigCache, resetConfigPath } from '../src/config.ts';
+
+resetConfigPath(join(tmpdir(), 'icc-protocol-test-' + process.pid));
 
 beforeEach(() => {
   process.env.ICC_IDENTITY = 'test-host';

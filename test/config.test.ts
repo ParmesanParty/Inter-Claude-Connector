@@ -1,7 +1,13 @@
 import { describe, it, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { clearConfigCache, loadConfig, getTlsOptions } from '../src/config.ts';
+import { mkdtempSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+import { clearConfigCache, loadConfig, getTlsOptions, resetConfigPath } from '../src/config.ts';
 import { withEnv } from './helpers.ts';
+
+const tmpDir = mkdtempSync(join(tmpdir(), 'icc-config-test-'));
+resetConfigPath(tmpDir);
 
 beforeEach(() => {
   clearConfigCache();

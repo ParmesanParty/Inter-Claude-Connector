@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { request, type IncomingMessage, type IncomingHttpHeaders } from 'node:http';
 import { execFileSync } from 'node:child_process';
-import { clearConfigCache, loadConfig } from '../src/config.ts';
+import { clearConfigCache, loadConfig, resetConfigPath } from '../src/config.ts';
 import { createICCServer } from '../src/server.ts';
 import { reset as resetLog } from '../src/log.ts';
 import { reset as resetInbox, init as initInbox } from '../src/inbox.ts';
@@ -24,6 +24,7 @@ export function createTestEnv(prefix = 'icc-test'): TestEnv {
   const dir = mkdtempSync(join(tmpdir(), `${prefix}-`));
   resetLog(dir);
   resetInbox(dir);
+  resetConfigPath(dir);
   initInbox();
   return {
     dir,

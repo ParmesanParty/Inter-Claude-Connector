@@ -3,10 +3,11 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, readFileSync, existsSync, rmSync, writeFileSync, copyFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { clearConfigCache } from '../src/config.ts';
+import { clearConfigCache, resetConfigPath } from '../src/config.ts';
 import { withEnv } from './helpers.ts';
 
 const testDir = mkdtempSync(join(tmpdir(), 'icc-tls-test-'));
+resetConfigPath(testDir);
 
 after(() => {
   rmSync(testDir, { recursive: true, force: true });

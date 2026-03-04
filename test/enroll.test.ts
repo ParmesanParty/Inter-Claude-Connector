@@ -5,10 +5,11 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { clearConfigCache } from '../src/config.ts';
+import { clearConfigCache, resetConfigPath } from '../src/config.ts';
 import { httpJSON } from './helpers.ts';
 
 const testDir = mkdtempSync(join(tmpdir(), 'icc-enroll-test-'));
+resetConfigPath(testDir);
 const caDir = join(testDir, 'ca-tls');
 const peerChallengeDir = join(testDir, 'peer-tls');
 
