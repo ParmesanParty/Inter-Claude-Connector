@@ -1,54 +1,14 @@
-import { describe, it, beforeEach } from 'node:test';
+import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { isPathAllowed, isCommandAllowed, isSubcommandAllowed, safeReadFile, safeExec } from '../src/util/exec.ts';
-import { clearConfigCache, loadConfig } from '../src/config.ts';
-import { createICCServer } from '../src/server.ts';
-import { reset as resetLog } from '../src/log.ts';
-import { reset as resetInbox, init as initInbox } from '../src/inbox.ts';
-import { request, type IncomingMessage } from 'node:http';
-import { mkdtempSync } from 'node:fs';
-import { join } from 'node:path';
-import { tmpdir } from 'node:os';
+import { clearConfigCache } from '../src/config.ts';
+import { createTestEnv, withServer, httpJSON, withEnv } from './helpers.ts';
 
-process.env.ICC_IDENTITY = 'test-host';
-process.env.ICC_AUTH_TOKEN = 'test-token-123';
+createTestEnv('icc-security-test');
+
+// Ensure exec/readfile disabled for this file — prevents leaking from user config
 process.env.ICC_READFILE_ENABLED = 'false';
 process.env.ICC_EXEC_ENABLED = 'false';
-
-// Redirect log and inbox to temp directories so tests don't pollute ~/.icc/
-const testLogDir = mkdtempSync(join(tmpdir(), 'icc-test-'));
-resetLog(testLogDir);
-resetInbox(testLogDir);
-initInbox();
-
-beforeEach(() => {
-  clearConfigCache();
-});
-
-function httpRequest(port: number, method: string, path: string, body: any = null, token: string | null = 'test-token-123'): Promise<{ status: number | undefined; data: any }> {
-  return new Promise((resolve, reject) => {
-    const payload = body ? JSON.stringify(body) : null;
-    const req = request(`http://127.0.0.1:${port}${path}`, {
-      method,
-      headers: {
-        ...(payload && { 'Content-Type': 'application/json' }),
-        ...(token && { 'Authorization': `Bearer ${token}` }),
-      },
-    }, (res: IncomingMessage) => {
-      let data = '';
-      res.on('data', (chunk: Buffer) => { data += chunk; });
-      res.on('end', () => {
-        resolve({
-          status: res.statusCode,
-          data: data ? JSON.parse(data) : null,
-        });
-      });
-    });
-    req.on('error', reject);
-    if (payload) req.write(payload);
-    req.end();
-  });
-}
 
 // --- Unit tests for validation helpers ---
 
@@ -163,13 +123,12 @@ describe('Security: disabled by default', () => {
   });
 
   it('safeExec returns numeric exitCode for failed command', async () => {
-    process.env.ICC_EXEC_ENABLED = 'true';
-    clearConfigCache();
-    const result = await safeExec('ls', ['/nonexistent-path-that-does-not-exist-12345']);
-    assert.equal(typeof result.exitCode, 'number');
-    assert.ok(result.exitCode > 0);
-    process.env.ICC_EXEC_ENABLED = 'false';
-    clearConfigCache();
+    await withEnv({ ICC_EXEC_ENABLED: 'true' }, async () => {
+      clearConfigCache();
+      const result = await safeExec('ls', ['/nonexistent-path-that-does-not-exist-12345']);
+      assert.equal(typeof result.exitCode, 'number');
+      assert.ok(result.exitCode > 0);
+    });
   });
 });
 
@@ -177,75 +136,35 @@ describe('Security: disabled by default', () => {
 
 describe('Server: /api/readfile', () => {
   it('returns 403 when readfile is disabled', async () => {
-    clearConfigCache();
-    const config = loadConfig();
-    config.remotes = {};
-    config.server.tls = { enabled: false, certPath: null, keyPath: null, caPath: null };
-    config.server.localToken = null;
-    config.server.peerTokens = {};
-    const s = createICCServer({ host: '127.0.0.1', port: 0, noAuth: true });
-    const info = await s.start();
-    try {
-      const res = await httpRequest(info.port, 'POST', '/api/readfile', { path: '/tmp/test' });
+    await withServer({}, async (port) => {
+      const res = await httpJSON(port, 'POST', '/api/readfile', { path: '/tmp/test' });
       assert.equal(res.status, 403);
       assert.ok(res.data.error.includes('disabled'));
-    } finally {
-      await s.stop();
-    }
+    });
   });
 
   it('returns 400 when path is missing', async () => {
-    clearConfigCache();
-    const config = loadConfig();
-    config.remotes = {};
-    config.server.tls = { enabled: false, certPath: null, keyPath: null, caPath: null };
-    config.server.localToken = null;
-    config.server.peerTokens = {};
-    const s = createICCServer({ host: '127.0.0.1', port: 0, noAuth: true });
-    const info = await s.start();
-    try {
-      const res = await httpRequest(info.port, 'POST', '/api/readfile', {});
+    await withServer({}, async (port) => {
+      const res = await httpJSON(port, 'POST', '/api/readfile', {});
       assert.equal(res.status, 400);
-    } finally {
-      await s.stop();
-    }
+    });
   });
 });
 
 describe('Server: /api/exec', () => {
   it('returns 403 when exec is disabled', async () => {
-    clearConfigCache();
-    const config = loadConfig();
-    config.remotes = {};
-    config.server.tls = { enabled: false, certPath: null, keyPath: null, caPath: null };
-    config.server.localToken = null;
-    config.server.peerTokens = {};
-    const s = createICCServer({ host: '127.0.0.1', port: 0, noAuth: true });
-    const info = await s.start();
-    try {
-      const res = await httpRequest(info.port, 'POST', '/api/exec', { command: 'ls' });
+    await withServer({}, async (port) => {
+      const res = await httpJSON(port, 'POST', '/api/exec', { command: 'ls' });
       assert.equal(res.status, 403);
       assert.ok(res.data.error.includes('disabled'));
-    } finally {
-      await s.stop();
-    }
+    });
   });
 
   it('returns 400 when command is missing', async () => {
-    clearConfigCache();
-    const config = loadConfig();
-    config.remotes = {};
-    config.server.tls = { enabled: false, certPath: null, keyPath: null, caPath: null };
-    config.server.localToken = null;
-    config.server.peerTokens = {};
-    const s = createICCServer({ host: '127.0.0.1', port: 0, noAuth: true });
-    const info = await s.start();
-    try {
-      const res = await httpRequest(info.port, 'POST', '/api/exec', {});
+    await withServer({}, async (port) => {
+      const res = await httpJSON(port, 'POST', '/api/exec', {});
       assert.equal(res.status, 400);
-    } finally {
-      await s.stop();
-    }
+    });
   });
 });
 
