@@ -33,7 +33,10 @@ function freshState(): void {
   reset();
   clearConfigCache();
   const config = loadConfig();
+  config.remotes = {};
   config.server.tls = { enabled: false, certPath: null, keyPath: null, caPath: null };
+  config.server.localToken = null;
+  config.server.peerTokens = {};
 }
 
 function httpRequest(port: number, method: string, path: string, body: Record<string, unknown> | null = null, token: string | null = 'test-token-123'): Promise<HttpResponse> {
@@ -206,6 +209,12 @@ describe('Server: GET /api/registry', () => {
   });
 
   it('requires auth', async () => {
+    clearConfigCache();
+    const config = loadConfig();
+    config.remotes = {};
+    config.server.tls = { enabled: false, certPath: null, keyPath: null, caPath: null };
+    config.server.localToken = 'test-auth-token';
+    config.server.peerTokens = {};
     const s = createICCServer({ host: '127.0.0.1', port: 0 });
     const { port } = await s.start();
     try {
@@ -250,6 +259,12 @@ describe('Server: POST /api/registry', () => {
   });
 
   it('requires auth', async () => {
+    clearConfigCache();
+    const config = loadConfig();
+    config.remotes = {};
+    config.server.tls = { enabled: false, certPath: null, keyPath: null, caPath: null };
+    config.server.localToken = 'test-auth-token';
+    config.server.peerTokens = {};
     const s = createICCServer({ host: '127.0.0.1', port: 0 });
     const { port } = await s.start();
     try {
@@ -367,6 +382,12 @@ describe('Server: DELETE /api/registry/:instance', () => {
   });
 
   it('requires auth', async () => {
+    clearConfigCache();
+    const config = loadConfig();
+    config.remotes = {};
+    config.server.tls = { enabled: false, certPath: null, keyPath: null, caPath: null };
+    config.server.localToken = 'test-auth-token';
+    config.server.peerTokens = {};
     const s = createICCServer({ host: '127.0.0.1', port: 0 });
     const { port } = await s.start();
     try {
@@ -409,6 +430,12 @@ describe('Server: GET /api/instances', () => {
   });
 
   it('requires auth', async () => {
+    clearConfigCache();
+    const config = loadConfig();
+    config.remotes = {};
+    config.server.tls = { enabled: false, certPath: null, keyPath: null, caPath: null };
+    config.server.localToken = 'test-auth-token';
+    config.server.peerTokens = {};
     const s = createICCServer({ host: '127.0.0.1', port: 0 });
     const { port } = await s.start();
     try {

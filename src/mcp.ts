@@ -54,7 +54,7 @@ function peerAPI(peerIdentity: string, method: string, path: string, body: unkno
   if (!peer?.httpUrl) return Promise.reject(new Error(`No HTTP URL configured for peer "${peerIdentity}"`));
 
   const baseUrl = peer.httpUrl;
-  const authToken = peer.token || config.server.authToken;
+  const authToken = peer.token || null;
   const timeout = config.transport.httpTimeout;
   const tlsOpts = getTlsOptions(config);
   const isHttps = baseUrl.startsWith('https://');
@@ -103,7 +103,7 @@ function peerAPI(peerIdentity: string, method: string, path: string, body: unkno
 function localAPI(method: string, path: string, body: unknown = null): Promise<any> {
   const config = loadConfig();
   const port = config.server.port;
-  const authToken = config.server.localToken || config.server.authToken;
+  const authToken = config.server.localToken || null;
   const tlsOpts = getTlsOptions(config);
   const protocol = tlsOpts ? 'https' : 'http';
   const requestFn = tlsOpts ? httpsRequest : httpRequest;

@@ -88,7 +88,10 @@ describe('HTTP Server', () => {
   async function startServer() {
     clearConfigCache();
     const config = loadConfig();
+    config.remotes = {};
     config.server.tls = { enabled: false, certPath: null, keyPath: null, caPath: null };
+    config.server.localToken = null;
+    config.server.peerTokens = {};
     const s = createICCServer({ host: '127.0.0.1', port: 0 });
     const info = await s.start();
     return { server: s, port: info.port };
@@ -108,7 +111,14 @@ describe('HTTP Server', () => {
   });
 
   it('rejects unauthorized requests', async () => {
-    const { server: s, port: p } = await startServer();
+    clearConfigCache();
+    const config = loadConfig();
+    config.remotes = {};
+    config.server.tls = { enabled: false, certPath: null, keyPath: null, caPath: null };
+    config.server.localToken = 'test-auth-token';
+    config.server.peerTokens = {};
+    const s = createICCServer({ host: '127.0.0.1', port: 0 });
+    const { port: p } = await s.start();
     try {
       const res = await httpRequest(p, 'POST', '/api/message', {}, 'wrong-token');
       assert.equal(res.status, 401);
@@ -199,7 +209,10 @@ describe('Zod validation', () => {
   async function startServer() {
     clearConfigCache();
     const config = loadConfig();
+    config.remotes = {};
     config.server.tls = { enabled: false, certPath: null, keyPath: null, caPath: null };
+    config.server.localToken = null;
+    config.server.peerTokens = {};
     const s = createICCServer({ host: '127.0.0.1', port: 0 });
     const info = await s.start();
     return { server: s, port: info.port };

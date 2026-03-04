@@ -164,7 +164,7 @@ async function send() {
   if (isLocal) {
     const protocol = tlsOpts ? 'https' : 'http';
     baseUrl = `${protocol}://127.0.0.1:${config.server.port}`;
-    token = config.server.localToken || config.server.authToken || '';
+    token = config.server.localToken || '';
     requestFn = tlsOpts ? (await import('node:https')).request : request;
     if (tlsOpts) requestOpts = { ...tlsOpts, checkServerIdentity: createIdentityVerifier(config.identity) };
   } else {
@@ -174,7 +174,7 @@ async function send() {
       process.exit(1);
     }
     baseUrl = peer.httpUrl;
-    token = peer.token || config.server.authToken || '';
+    token = peer.token || '';
     const isHttps = baseUrl.startsWith('https://');
     requestFn = isHttps ? (await import('node:https')).request : request;
     if (isHttps && tlsOpts) requestOpts = { ...tlsOpts, checkServerIdentity: createIdentityVerifier(host!) };
@@ -280,18 +280,19 @@ async function init() {
     console.log('Local token already configured');
   }
 
-  // Legacy: generate or set auth token
-  if (flags.token) {
-    config.authToken = flags.token;
-    config.server.authToken = flags.token;
-    console.log('Auth token set from --token flag');
-  } else if (!config.server.authToken) {
-    const token = randomBytes(32).toString('hex');
-    config.server.authToken = token;
-    console.log('Generated auth token:', token);
-    console.log('Copy this token to the remote host: icc init --token', token);
-  } else {
-    console.log('Auth token already configured');
+  // Migrate legacy authToken → localToken if present
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const legacyAuth = (config.server as any).authToken;
+  if (legacyAuth && !config.server.localToken) {
+    config.server.localToken = legacyAuth;
+    console.log('Migrated legacy authToken → localToken');
+  }
+  if (legacyAuth) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    delete (config as any).authToken;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    delete (config.server as any).authToken;
+    console.log('Removed legacy authToken from config');
   }
 
   // Set identity if provided
@@ -346,7 +347,6 @@ async function config() {
   // Redact all tokens for display
   const display = JSON.parse(JSON.stringify(current));
   const redact = (v: string) => v ? v.slice(0, 8) + '...' : v;
-  if (display.server?.authToken) display.server.authToken = redact(display.server.authToken);
   if (display.server?.localToken) display.server.localToken = redact(display.server.localToken);
   if (display.server?.peerTokens) {
     for (const peer of Object.keys(display.server.peerTokens)) {
@@ -528,7 +528,7 @@ async function hook() {
     : getSessionInstanceName(cwdInstanceName);
   const config = loadConfig();
   const port = config.server.port;
-  const authToken = config.server.localToken || config.server.authToken;
+  const authToken = config.server.localToken;
 
   switch (subcommand) {
     case 'startup': {

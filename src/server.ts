@@ -63,8 +63,8 @@ function extractToken(req: IncomingMessage): string | null {
  * Authenticate a request and resolve the caller's identity.
  */
 function checkAuth(req: IncomingMessage, config: ICCConfig): AuthResult {
-  const { localToken, peerTokens, authToken } = config.server;
-  const hasAnyToken = localToken || authToken || (peerTokens && Object.keys(peerTokens).length > 0);
+  const { localToken, peerTokens } = config.server;
+  const hasAnyToken = localToken || (peerTokens && Object.keys(peerTokens).length > 0);
 
   if (!hasAnyToken) return { authenticated: true, identity: '_local' };
 
@@ -85,12 +85,6 @@ function checkAuth(req: IncomingMessage, config: ICCConfig): AuthResult {
     }
   }
 
-  // Check legacy authToken
-  if (authToken && safeTokenEquals(token, authToken)) {
-    log.warn('Authentication via legacy authToken — migrate to per-peer tokens');
-    return { authenticated: true, identity: '_legacy' };
-  }
-
   return { authenticated: false, identity: null };
 }
 
@@ -98,7 +92,7 @@ function checkAuth(req: IncomingMessage, config: ICCConfig): AuthResult {
  * Validate that the `from` field in a message matches the authenticated identity.
  */
 function validateFrom(authIdentity: string | null, fromField: string): boolean {
-  if (authIdentity === '_local' || authIdentity === '_legacy') return true;
+  if (authIdentity === '_local') return true;
   if (!fromField) return false;
   return parseAddress(fromField).host === authIdentity;
 }

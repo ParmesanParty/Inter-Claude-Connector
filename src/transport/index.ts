@@ -22,7 +22,7 @@ export class TransportManager {
 
     this._http = new HTTPTransport({
       baseUrl: peerConfig.httpUrl,
-      authToken: peerConfig.token || config.server.authToken,
+      authToken: peerConfig.token || null,
       timeout: config.transport.httpTimeout,
       tlsOptions,
     });

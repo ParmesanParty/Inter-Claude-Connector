@@ -38,7 +38,6 @@ export interface TlsConfig {
 export interface ServerConfig {
   port: number;
   host: string;
-  authToken: string | null;
   localToken: string | null;
   peerTokens: Record<string, string>;
   tls: TlsConfig;

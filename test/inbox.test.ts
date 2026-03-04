@@ -36,7 +36,10 @@ describe('Inbox: push and getUnread', () => {
     freshInboxDir();
     clearConfigCache();
     const config = loadConfig();
+    config.remotes = {};
     config.server.tls = { enabled: false } as TlsConfig;
+    config.server.localToken = null;
+    config.server.peerTokens = {};
   });
 
   it('push returns a message with generated fields', () => {
@@ -77,7 +80,10 @@ describe('Inbox: markRead', () => {
     freshInboxDir();
     clearConfigCache();
     const config = loadConfig();
+    config.remotes = {};
     config.server.tls = { enabled: false } as TlsConfig;
+    config.server.localToken = null;
+    config.server.peerTokens = {};
   });
 
   it('marks specific messages as read', () => {
@@ -95,7 +101,10 @@ describe('Inbox: markAllRead', () => {
     freshInboxDir();
     clearConfigCache();
     const config = loadConfig();
+    config.remotes = {};
     config.server.tls = { enabled: false } as TlsConfig;
+    config.server.localToken = null;
+    config.server.peerTokens = {};
   });
 
   it('marks all messages as read', () => {
@@ -112,7 +121,10 @@ describe('Inbox: remove', () => {
     freshInboxDir();
     clearConfigCache();
     const config = loadConfig();
+    config.remotes = {};
     config.server.tls = { enabled: false } as TlsConfig;
+    config.server.localToken = null;
+    config.server.peerTokens = {};
   });
 
   it('removes messages by ID', () => {
@@ -129,7 +141,10 @@ describe('Inbox: getAll', () => {
     freshInboxDir();
     clearConfigCache();
     const config = loadConfig();
+    config.remotes = {};
     config.server.tls = { enabled: false } as TlsConfig;
+    config.server.localToken = null;
+    config.server.peerTokens = {};
   });
 
   it('returns both read and unread messages', () => {
@@ -148,7 +163,10 @@ describe('Inbox: subscribe', () => {
     freshInboxDir();
     clearConfigCache();
     const config = loadConfig();
+    config.remotes = {};
     config.server.tls = { enabled: false } as TlsConfig;
+    config.server.localToken = null;
+    config.server.peerTokens = {};
   });
 
   it('notifies subscribers on push', () => {
@@ -275,7 +293,10 @@ describe('Inbox: setNotifier', () => {
     freshInboxDir();
     clearConfigCache();
     const config = loadConfig();
+    config.remotes = {};
     config.server.tls = { enabled: false } as TlsConfig;
+    config.server.localToken = null;
+    config.server.peerTokens = {};
   });
 
   it('calls notifier on push', () => {
@@ -328,7 +349,10 @@ describe('Server: POST /api/inbox', () => {
     freshInboxDir();
     clearConfigCache();
     const config = loadConfig();
+    config.remotes = {};
     config.server.tls = { enabled: false } as TlsConfig;
+    config.server.localToken = null;
+    config.server.peerTokens = {};
   });
 
   it('accepts valid message and returns id', async () => {
@@ -358,6 +382,12 @@ describe('Server: POST /api/inbox', () => {
   });
 
   it('requires auth', async () => {
+    clearConfigCache();
+    const config = loadConfig();
+    config.remotes = {};
+    config.server.tls = { enabled: false } as TlsConfig;
+    config.server.localToken = 'test-auth-token';
+    config.server.peerTokens = {};
     const s = createICCServer({ host: '127.0.0.1', port: 0 });
     const { port } = await s.start();
     try {
@@ -374,7 +404,10 @@ describe('Server: GET /api/inbox', () => {
     freshInboxDir();
     clearConfigCache();
     const config = loadConfig();
+    config.remotes = {};
     config.server.tls = { enabled: false } as TlsConfig;
+    config.server.localToken = null;
+    config.server.peerTokens = {};
   });
 
   it('returns unread messages by default', async () => {
@@ -417,7 +450,10 @@ describe('Server: POST /api/inbox/mark-read', () => {
     freshInboxDir();
     clearConfigCache();
     const config = loadConfig();
+    config.remotes = {};
     config.server.tls = { enabled: false } as TlsConfig;
+    config.server.localToken = null;
+    config.server.peerTokens = {};
   });
 
   it('marks specific messages as read', async () => {
@@ -457,7 +493,10 @@ describe('Server: POST /api/inbox/delete', () => {
     freshInboxDir();
     clearConfigCache();
     const config = loadConfig();
+    config.remotes = {};
     config.server.tls = { enabled: false } as TlsConfig;
+    config.server.localToken = null;
+    config.server.peerTokens = {};
   });
 
   it('deletes messages by ID', async () => {
@@ -495,7 +534,10 @@ describe('Inbox: getUnread with forAddress', () => {
     freshInboxDir();
     clearConfigCache();
     const config = loadConfig();
+    config.remotes = {};
     config.server.tls = { enabled: false } as TlsConfig;
+    config.server.localToken = null;
+    config.server.peerTokens = {};
   });
 
   it('filters messages by instance address', () => {
@@ -526,7 +568,10 @@ describe('Inbox: getAll with forAddress', () => {
     freshInboxDir();
     clearConfigCache();
     const config = loadConfig();
+    config.remotes = {};
     config.server.tls = { enabled: false } as TlsConfig;
+    config.server.localToken = null;
+    config.server.peerTokens = {};
   });
 
   it('filters by instance address', () => {
@@ -546,7 +591,10 @@ describe('Inbox: markAllRead with forAddress', () => {
     freshInboxDir();
     clearConfigCache();
     const config = loadConfig();
+    config.remotes = {};
     config.server.tls = { enabled: false } as TlsConfig;
+    config.server.localToken = null;
+    config.server.peerTokens = {};
   });
 
   it('only marks messages for specific instance as read', () => {
@@ -620,7 +668,10 @@ describe('Server: POST /api/inbox with to field', () => {
     freshInboxDir();
     clearConfigCache();
     const config = loadConfig();
+    config.remotes = {};
     config.server.tls = { enabled: false } as TlsConfig;
+    config.server.localToken = null;
+    config.server.peerTokens = {};
   });
 
   it('accepts message with instance-addressed to field', async () => {
@@ -671,7 +722,10 @@ describe('Server: GET /api/inbox with ?instance=', () => {
     freshInboxDir();
     clearConfigCache();
     const config = loadConfig();
+    config.remotes = {};
     config.server.tls = { enabled: false } as TlsConfig;
+    config.server.localToken = null;
+    config.server.peerTokens = {};
   });
 
   it('filters by instance', async () => {
@@ -737,7 +791,10 @@ describe('Server: GET /api/inbox with ?receipts=false', () => {
     freshInboxDir();
     clearConfigCache();
     const config = loadConfig();
+    config.remotes = {};
     config.server.tls = { enabled: false } as TlsConfig;
+    config.server.localToken = null;
+    config.server.peerTokens = {};
   });
 
   it('excludes receipt messages from response and unreadCount', async () => {
@@ -772,7 +829,10 @@ describe('Server: GET /api/health with instance', () => {
     freshInboxDir();
     clearConfigCache();
     const config = loadConfig();
+    config.remotes = {};
     config.server.tls = { enabled: false } as TlsConfig;
+    config.server.localToken = null;
+    config.server.peerTokens = {};
   });
 
   it('includes instance field (null when not set)', async () => {
@@ -1095,7 +1155,10 @@ describe('Inbox: getById', () => {
     freshInboxDir();
     clearConfigCache();
     const config = loadConfig();
+    config.remotes = {};
     config.server.tls = { enabled: false } as TlsConfig;
+    config.server.localToken = null;
+    config.server.peerTokens = {};
   });
 
   it('returns message when found', () => {
@@ -1125,7 +1188,10 @@ describe('Server: GET /api/inbox/:id', () => {
     freshInboxDir();
     clearConfigCache();
     const config = loadConfig();
+    config.remotes = {};
     config.server.tls = { enabled: false } as TlsConfig;
+    config.server.localToken = null;
+    config.server.peerTokens = {};
   });
 
   it('returns message by ID', async () => {
@@ -1159,6 +1225,12 @@ describe('Server: GET /api/inbox/:id', () => {
   });
 
   it('requires auth', async () => {
+    clearConfigCache();
+    const config = loadConfig();
+    config.remotes = {};
+    config.server.tls = { enabled: false } as TlsConfig;
+    config.server.localToken = 'test-auth-token';
+    config.server.peerTokens = {};
     const s = createICCServer({ host: '127.0.0.1', port: 0 });
     const { port } = await s.start();
     try {
@@ -1248,7 +1320,10 @@ describe('Inbox: purgeStale', () => {
     freshInboxDir();
     clearConfigCache();
     const config = loadConfig();
+    config.remotes = {};
     config.server.tls = { enabled: false } as TlsConfig;
+    config.server.localToken = null;
+    config.server.peerTokens = {};
   });
 
   it('removes unread messages older than maxAgeDays', () => {
@@ -1365,7 +1440,10 @@ describe('Inbox: _meta field', () => {
     freshInboxDir();
     clearConfigCache();
     const config = loadConfig();
+    config.remotes = {};
     config.server.tls = { enabled: false } as TlsConfig;
+    config.server.localToken = null;
+    config.server.peerTokens = {};
   });
 
   it('push preserves _meta', () => {
@@ -1414,7 +1492,10 @@ describe('Inbox: silent push', () => {
     freshInboxDir();
     clearConfigCache();
     const config = loadConfig();
+    config.remotes = {};
     config.server.tls = { enabled: false } as TlsConfig;
+    config.server.localToken = null;
+    config.server.peerTokens = {};
   });
 
   it('silent push skips signal file', () => {
@@ -1456,7 +1537,10 @@ describe('Inbox: receipts excluded from signal files', () => {
     freshInboxDir();
     clearConfigCache();
     const config = loadConfig();
+    config.remotes = {};
     config.server.tls = { enabled: false } as TlsConfig;
+    config.server.localToken = null;
+    config.server.peerTokens = {};
   });
 
   it('unread receipts do not create signal files', () => {
@@ -1478,7 +1562,10 @@ describe('Inbox: receipt sender', () => {
     freshInboxDir();
     clearConfigCache();
     const config = loadConfig();
+    config.remotes = {};
     config.server.tls = { enabled: false } as TlsConfig;
+    config.server.localToken = null;
+    config.server.peerTokens = {};
   });
 
   it('markRead calls sender for newly-read remote messages', () => {
@@ -1561,7 +1648,10 @@ describe('Server: POST /api/inbox with _meta', () => {
     freshInboxDir();
     clearConfigCache();
     const config = loadConfig();
+    config.remotes = {};
     config.server.tls = { enabled: false } as TlsConfig;
+    config.server.localToken = null;
+    config.server.peerTokens = {};
   });
 
   it('preserves _meta field', async () => {
@@ -1691,7 +1781,10 @@ describe('Server: POST /api/inbox with threadId', () => {
     freshInboxDir();
     clearConfigCache();
     const config = loadConfig();
+    config.remotes = {};
     config.server.tls = { enabled: false } as TlsConfig;
+    config.server.localToken = null;
+    config.server.peerTokens = {};
   });
 
   it('accepts and returns threadId', async () => {
@@ -1744,7 +1837,10 @@ describe('Server: GET /api/inbox with ?threadId=', () => {
     freshInboxDir();
     clearConfigCache();
     const config = loadConfig();
+    config.remotes = {};
     config.server.tls = { enabled: false } as TlsConfig;
+    config.server.localToken = null;
+    config.server.peerTokens = {};
   });
 
   it('filters messages by threadId', async () => {
@@ -1789,7 +1885,10 @@ describe('Inbox: threadId support', () => {
     freshInboxDir();
     clearConfigCache();
     const config = loadConfig();
+    config.remotes = {};
     config.server.tls = { enabled: false } as TlsConfig;
+    config.server.localToken = null;
+    config.server.peerTokens = {};
   });
 
   it('push sets threadId when provided', () => {
@@ -1837,7 +1936,10 @@ describe('Inbox: _meta.recipients', () => {
     freshInboxDir();
     clearConfigCache();
     const config = loadConfig();
+    config.remotes = {};
     config.server.tls = { enabled: false } as TlsConfig;
+    config.server.localToken = null;
+    config.server.peerTokens = {};
   });
 
   it('push preserves _meta with recipients', () => {
@@ -1869,7 +1971,10 @@ describe('Inbox: push with status', () => {
     freshInboxDir();
     clearConfigCache();
     const config = loadConfig();
+    config.remotes = {};
     config.server.tls = { enabled: false } as TlsConfig;
+    config.server.localToken = null;
+    config.server.peerTokens = {};
   });
 
   it('push with status stores it on the message', () => {
@@ -1914,7 +2019,10 @@ describe('Inbox: signal file with status', () => {
     freshInboxDir();
     clearConfigCache();
     const config = loadConfig();
+    config.remotes = {};
     config.server.tls = { enabled: false } as TlsConfig;
+    config.server.localToken = null;
+    config.server.peerTokens = {};
   });
 
   it('signal file includes Status line when present', () => {
@@ -1935,7 +2043,10 @@ describe('Server: POST /api/inbox with status', () => {
     freshInboxDir();
     clearConfigCache();
     const config = loadConfig();
+    config.remotes = {};
     config.server.tls = { enabled: false } as TlsConfig;
+    config.server.localToken = null;
+    config.server.peerTokens = {};
   });
 
   it('accepts valid status and returns it', async () => {

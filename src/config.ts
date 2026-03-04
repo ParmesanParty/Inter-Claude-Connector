@@ -40,7 +40,6 @@ function applyEnvOverrides(config: ICCConfig): ICCConfig {
   // Use 'in' to check key existence — allows empty string to override (clear) a value
   if ('ICC_IDENTITY' in env && env.ICC_IDENTITY) config.identity = env.ICC_IDENTITY;
   if ('ICC_PORT' in env && env.ICC_PORT) config.server.port = parseInt(env.ICC_PORT, 10);
-  if ('ICC_AUTH_TOKEN' in env) config.server.authToken = env.ICC_AUTH_TOKEN || null;
   if ('ICC_LOCAL_TOKEN' in env) config.server.localToken = env.ICC_LOCAL_TOKEN || null;
   if ('ICC_HOST' in env && env.ICC_HOST) config.server.host = env.ICC_HOST;
   if ('ICC_INSTANCE' in env) config.instance = env.ICC_INSTANCE || null;
@@ -88,11 +87,11 @@ export function getPeerIdentities(config: ICCConfig): string[] {
 }
 
 export function getOutboundToken(config: ICCConfig, peerIdentity: string): string | null {
-  return config.remotes?.[peerIdentity]?.token || config.server.authToken || null;
+  return config.remotes?.[peerIdentity]?.token || null;
 }
 
 export function getLocalToken(config: ICCConfig): string | null {
-  return config.server.localToken || config.server.authToken || null;
+  return config.server.localToken || null;
 }
 
 export interface ICCTlsOptions {

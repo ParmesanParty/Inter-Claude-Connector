@@ -24,7 +24,7 @@ export class HTTPTransport implements Transport {
   constructor(options: HTTPTransportOptions = {}) {
     const config = loadConfig();
     this.baseUrl = options.baseUrl ?? null;
-    this.authToken = options.authToken ?? config.server.authToken;
+    this.authToken = options.authToken ?? null;
     this.timeout = options.timeout ?? config.transport.httpTimeout;
     this.tlsOptions = options.tlsOptions ?? null;
   }

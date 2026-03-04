@@ -10,7 +10,7 @@ type LogLevel = 'debug' | 'info' | 'warn' | 'error';
 const LEVELS: Record<LogLevel, number> = { debug: 0, info: 1, warn: 2, error: 3 };
 let minLevel = LEVELS[(process.env.ICC_LOG_LEVEL as LogLevel)] ?? LEVELS.info;
 
-const TOKEN_PATTERN = /("?authToken"?\s*[:=]\s*)"[^"]+"/gi;
+const TOKEN_PATTERN = /("?(?:localToken|peerToken|token)"?\s*[:=]\s*)"[^"]+"/gi;
 
 function redact(str: string): string;
 function redact(str: unknown): unknown;

@@ -21,7 +21,7 @@ function resolveProxyTarget(config: ICCConfig, peerIdentity: string): ProxyTarge
   if (peerIdentity === config.identity) {
     const protocol = tlsOpts ? 'https' : 'http';
     const baseUrl = `${protocol}://127.0.0.1:${config.server.port}`;
-    const token = config.server.localToken || config.server.authToken || '';
+    const token = config.server.localToken || '';
     return {
       baseUrl,
       token,
@@ -32,7 +32,7 @@ function resolveProxyTarget(config: ICCConfig, peerIdentity: string): ProxyTarge
   const peer = config.remotes?.[peerIdentity];
   if (!peer?.httpUrl) return null;
   const baseUrl = peer.httpUrl;
-  const token = peer.token || config.server.authToken || '';
+  const token = peer.token || '';
   const isHttps = baseUrl.startsWith('https://');
   return {
     baseUrl,

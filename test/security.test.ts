@@ -179,7 +179,10 @@ describe('Server: /api/readfile', () => {
   it('returns 403 when readfile is disabled', async () => {
     clearConfigCache();
     const config = loadConfig();
+    config.remotes = {};
     config.server.tls = { enabled: false, certPath: null, keyPath: null, caPath: null };
+    config.server.localToken = null;
+    config.server.peerTokens = {};
     const s = createICCServer({ host: '127.0.0.1', port: 0 });
     const info = await s.start();
     try {
@@ -194,7 +197,10 @@ describe('Server: /api/readfile', () => {
   it('returns 400 when path is missing', async () => {
     clearConfigCache();
     const config = loadConfig();
+    config.remotes = {};
     config.server.tls = { enabled: false, certPath: null, keyPath: null, caPath: null };
+    config.server.localToken = null;
+    config.server.peerTokens = {};
     const s = createICCServer({ host: '127.0.0.1', port: 0 });
     const info = await s.start();
     try {
@@ -210,7 +216,10 @@ describe('Server: /api/exec', () => {
   it('returns 403 when exec is disabled', async () => {
     clearConfigCache();
     const config = loadConfig();
+    config.remotes = {};
     config.server.tls = { enabled: false, certPath: null, keyPath: null, caPath: null };
+    config.server.localToken = null;
+    config.server.peerTokens = {};
     const s = createICCServer({ host: '127.0.0.1', port: 0 });
     const info = await s.start();
     try {
@@ -225,7 +234,10 @@ describe('Server: /api/exec', () => {
   it('returns 400 when command is missing', async () => {
     clearConfigCache();
     const config = loadConfig();
+    config.remotes = {};
     config.server.tls = { enabled: false, certPath: null, keyPath: null, caPath: null };
+    config.server.localToken = null;
+    config.server.peerTokens = {};
     const s = createICCServer({ host: '127.0.0.1', port: 0 });
     const info = await s.start();
     try {

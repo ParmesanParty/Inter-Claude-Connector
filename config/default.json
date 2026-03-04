@@ -5,7 +5,6 @@
   "server": {
     "port": 3179,
     "host": "0.0.0.0",
-    "authToken": null,
     "localToken": null,
     "peerTokens": {},
     "tls": {
