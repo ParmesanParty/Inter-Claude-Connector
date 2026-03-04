@@ -1,25 +1,13 @@
-import { describe, it, before, beforeEach } from 'node:test';
+import { describe, it, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync } from 'node:fs';
-import { join } from 'node:path';
-import { tmpdir } from 'node:os';
-import { clearConfigCache, loadConfig } from '../src/config.ts';
 import { createMCPServer, createToolHandlers } from '../src/mcp.ts';
-import { reset as resetLog } from '../src/log.ts';
 import type { ICCClient } from '../src/client.ts';
+import { createTestEnv, isolateConfig } from './helpers.ts';
 
-process.env.ICC_IDENTITY = 'test-host';
-process.env.ICC_AUTH_TOKEN = 'test-token-123';
-
-// Redirect log to a temp directory so tests don't pollute ~/.icc/messages.jsonl
-const testLogDir = mkdtempSync(join(tmpdir(), 'icc-test-'));
-resetLog(testLogDir);
+createTestEnv('icc-mcp-test');
 
 beforeEach(() => {
-  clearConfigCache();
-  // Isolate tests from user's ~/.icc/config.json remotes
-  const config = loadConfig();
-  config.remotes = {};
+  isolateConfig();
 });
 
 describe('MCP Server creation', () => {
@@ -70,7 +58,6 @@ describe('MCP tool: ping_remote', () => {
 });
 
 // --- Message routing tests ---
-// ICC_IDENTITY is set to 'test-host' at top of file.
 
 /**
  * Create mock API functions that track calls.

@@ -1,49 +1,31 @@
 import { describe, it, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync } from 'node:fs';
-import { join } from 'node:path';
-import { tmpdir } from 'node:os';
-import { clearConfigCache, loadConfig } from '../src/config.ts';
-import { reset as resetLog } from '../src/log.ts';
-import { reset as resetInbox, init as initInbox } from '../src/inbox.ts';
 import { PeerRouter } from '../src/peers.ts';
+import { createTestEnv, isolateConfig } from './helpers.ts';
 
-// Isolate log/inbox to temp dirs
-const testDir = mkdtempSync(join(tmpdir(), 'icc-peers-test-'));
-resetLog(testDir);
-resetInbox(testDir);
-initInbox();
+createTestEnv('icc-peers-test');
 
 // --- 0 peers ---
 
 describe('PeerRouter: no peers configured', () => {
   beforeEach(() => {
-    clearConfigCache();
     delete process.env.ICC_REMOTES;
   });
 
-  function loadIsolatedConfig() {
-    process.env.ICC_IDENTITY = 'test-host';
-    process.env.ICC_AUTH_TOKEN = 'test-token';
-    clearConfigCache();
-    const config = loadConfig();
-    config.remotes = {};
-  }
-
   it('listPeers returns empty array', () => {
-    loadIsolatedConfig();
+    isolateConfig();
     const router = new PeerRouter();
     assert.deepEqual(router.listPeers(), []);
   });
 
   it('getDefaultPeer returns null', () => {
-    loadIsolatedConfig();
+    isolateConfig();
     const router = new PeerRouter();
     assert.equal(router.getDefaultPeer(), null);
   });
 
   it('getTransport throws for any peer', () => {
-    loadIsolatedConfig();
+    isolateConfig();
     const router = new PeerRouter();
     assert.throws(
       () => router.getTransport('peerA'),
@@ -52,7 +34,7 @@ describe('PeerRouter: no peers configured', () => {
   });
 
   it('checkAllConnectivity returns empty object', async () => {
-    loadIsolatedConfig();
+    isolateConfig();
     const router = new PeerRouter();
     const results = await router.checkAllConnectivity();
     assert.deepEqual(results, {});
@@ -62,20 +44,8 @@ describe('PeerRouter: no peers configured', () => {
 // --- resolveTarget ---
 
 describe('PeerRouter: resolveTarget', () => {
-  function loadIsolatedConfig() {
-    process.env.ICC_IDENTITY = 'test-host';
-    process.env.ICC_AUTH_TOKEN = 'test-token';
-    clearConfigCache();
-    const config = loadConfig();
-    config.remotes = {};
-  }
-
-  beforeEach(() => {
-    clearConfigCache();
-  });
-
   it('returns null for empty/null address', () => {
-    loadIsolatedConfig();
+    isolateConfig();
     const router = new PeerRouter();
     assert.equal(router.resolveTarget(null as unknown as string), null);
     assert.equal(router.resolveTarget(''), null);
@@ -83,20 +53,20 @@ describe('PeerRouter: resolveTarget', () => {
   });
 
   it('returns null for local address', () => {
-    loadIsolatedConfig();
+    isolateConfig();
     const router = new PeerRouter();
     assert.equal(router.resolveTarget('test-host/myapp'), null);
   });
 
   it('returns peer identity for remote address', () => {
-    loadIsolatedConfig();
+    isolateConfig();
     const router = new PeerRouter();
     assert.equal(router.resolveTarget('peerA/myapp'), 'peerA');
     assert.equal(router.resolveTarget('peerB/icc'), 'peerB');
   });
 
   it('returns host from broadcast address', () => {
-    loadIsolatedConfig();
+    isolateConfig();
     const router = new PeerRouter();
     assert.equal(router.resolveTarget('peerA'), 'peerA');
   });
@@ -106,11 +76,7 @@ describe('PeerRouter: resolveTarget', () => {
 
 describe('PeerRouter: getTransport error message', () => {
   it('shows (none) when no peers configured', () => {
-    process.env.ICC_IDENTITY = 'test-host';
-    process.env.ICC_AUTH_TOKEN = 'test-token';
-    clearConfigCache();
-    const config = loadConfig();
-    config.remotes = {};
+    isolateConfig();
     const router = new PeerRouter();
     try {
       router.getTransport('nonexistent-peer-xyz');
@@ -122,11 +88,7 @@ describe('PeerRouter: getTransport error message', () => {
   });
 
   it('lists known peers in error message', () => {
-    process.env.ICC_IDENTITY = 'test-host';
-    process.env.ICC_AUTH_TOKEN = 'test-token';
-    clearConfigCache();
-    const config = loadConfig();
-    config.remotes = { alpha: { httpUrl: 'http://localhost:1' }, beta: { httpUrl: 'http://localhost:2' } };
+    isolateConfig({ remotes: { alpha: { httpUrl: 'http://localhost:1' }, beta: { httpUrl: 'http://localhost:2' } } as any });
     const router = new PeerRouter();
     try {
       router.getTransport('nonexistent-peer-xyz');
@@ -141,31 +103,19 @@ describe('PeerRouter: getTransport error message', () => {
 
 describe('PeerRouter: getDefaultPeer', () => {
   it('returns null with 0 peers', () => {
-    process.env.ICC_IDENTITY = 'test-host';
-    process.env.ICC_AUTH_TOKEN = 'test-token';
-    clearConfigCache();
-    const config = loadConfig();
-    config.remotes = {};
+    isolateConfig();
     const router = new PeerRouter();
     assert.equal(router.getDefaultPeer(), null);
   });
 
   it('returns sole peer with 1 peer', () => {
-    process.env.ICC_IDENTITY = 'test-host';
-    process.env.ICC_AUTH_TOKEN = 'test-token';
-    clearConfigCache();
-    const config = loadConfig();
-    config.remotes = { alpha: { httpUrl: 'http://localhost:1' } };
+    isolateConfig({ remotes: { alpha: { httpUrl: 'http://localhost:1' } } as any });
     const router = new PeerRouter();
     assert.equal(router.getDefaultPeer(), 'alpha');
   });
 
   it('returns null with 2+ peers', () => {
-    process.env.ICC_IDENTITY = 'test-host';
-    process.env.ICC_AUTH_TOKEN = 'test-token';
-    clearConfigCache();
-    const config = loadConfig();
-    config.remotes = { alpha: { httpUrl: 'http://localhost:1' }, beta: { httpUrl: 'http://localhost:2' } };
+    isolateConfig({ remotes: { alpha: { httpUrl: 'http://localhost:1' }, beta: { httpUrl: 'http://localhost:2' } } as any });
     const router = new PeerRouter();
     assert.equal(router.getDefaultPeer(), null);
   });
