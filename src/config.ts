@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
@@ -61,6 +61,14 @@ export function loadConfig({ reload = false } = {}): ICCConfig {
   try {
     const userConfig = readJSON(USER_CONFIG_PATH);
     config = deepMerge(config as unknown as Record<string, unknown>, userConfig) as unknown as ICCConfig;
+    // Warn if config is readable by group/others
+    try {
+      const stat = statSync(USER_CONFIG_PATH);
+      const mode = stat.mode & 0o777;
+      if (mode & 0o077) {
+        console.error(`[ICC] WARNING: ${USER_CONFIG_PATH} is readable by group/others (mode ${mode.toString(8)}). Run: chmod 600 ${USER_CONFIG_PATH}`);
+      }
+    } catch { /* stat failed — ignore */ }
   } catch {
     // No user config — use defaults
   }
