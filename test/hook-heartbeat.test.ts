@@ -208,6 +208,134 @@ describe('Hook: session-end', () => {
   });
 });
 
+describe('Snooze: snooze-watcher and wake-watcher', () => {
+  let tmpHome: string;
+
+  beforeEach(() => {
+    tmpHome = mkdtempSync(join(tmpdir(), 'icc-hb-test-'));
+    mkdirSync(join(tmpHome, '.icc'), { recursive: true });
+  });
+
+  afterEach(() => {
+    try { rmSync(tmpHome, { recursive: true, force: true }); } catch {}
+  });
+
+  it('snooze-watcher creates snooze file', () => {
+    const stdout = runHook('snooze-watcher', { HOME: tmpHome });
+    assert.ok(stdout.includes('[ICC] Watcher snoozed'), 'should confirm snooze');
+    const snoozePath = join(tmpHome, '.icc', `watcher.${instanceName}.snoozed`);
+    assert.ok(existsSync(snoozePath), 'snooze file should exist');
+  });
+
+  it('wake-watcher removes snooze file and triggers launch', () => {
+    // Create snooze file first
+    writeFileSync(join(tmpHome, '.icc', `watcher.${instanceName}.snoozed`), new Date().toISOString());
+
+    const stdout = runHook('wake-watcher', { HOME: tmpHome });
+    assert.ok(stdout.includes('[ICC] Start mail watcher'), 'should trigger launch');
+    const snoozePath = join(tmpHome, '.icc', `watcher.${instanceName}.snoozed`);
+    assert.ok(!existsSync(snoozePath), 'snooze file should be deleted');
+  });
+});
+
+describe('Snooze: startup respects snooze state', () => {
+  let tmpHome: string;
+
+  beforeEach(() => {
+    tmpHome = mkdtempSync(join(tmpdir(), 'icc-hb-test-'));
+    mkdirSync(join(tmpHome, '.icc'), { recursive: true });
+  });
+
+  afterEach(() => {
+    try { rmSync(tmpHome, { recursive: true, force: true }); } catch {}
+  });
+
+  it('startup suppresses launch when snoozed (re-fire)', () => {
+    // First startup: creates session file (simulates original session start)
+    runHook('startup', { HOME: tmpHome });
+    // Now create snooze file (user ran /snooze mid-session)
+    writeFileSync(join(tmpHome, '.icc', `watcher.${instanceName}.snoozed`), new Date().toISOString());
+    // Second startup: re-fire (/clear) — should detect session file and preserve snooze
+    const stdout = runHook('startup', { HOME: tmpHome });
+    assert.ok(stdout.includes('[ICC] Watcher snoozed'), 'should report snoozed');
+    assert.ok(!stdout.includes('[ICC] Start mail watcher'), 'should NOT trigger launch');
+  });
+
+  it('startup clears stale snooze on fresh session (no session file)', () => {
+    // Create snooze file but NO session file → fresh session → clear snooze
+    writeFileSync(join(tmpHome, '.icc', `watcher.${instanceName}.snoozed`), new Date().toISOString());
+    const stdout = runHook('startup', { HOME: tmpHome });
+    assert.ok(stdout.includes('[ICC] Start mail watcher'), 'should trigger launch after clearing stale snooze');
+    assert.ok(!stdout.includes('[ICC] Watcher snoozed'), 'should NOT report snoozed');
+    const snoozePath = join(tmpHome, '.icc', `watcher.${instanceName}.snoozed`);
+    assert.ok(!existsSync(snoozePath), 'stale snooze file should be deleted');
+  });
+});
+
+describe('Snooze: check respects snooze state', () => {
+  let tmpHome: string;
+
+  beforeEach(() => {
+    tmpHome = mkdtempSync(join(tmpdir(), 'icc-hb-test-'));
+    mkdirSync(join(tmpHome, '.icc'), { recursive: true });
+  });
+
+  afterEach(() => {
+    try { rmSync(tmpHome, { recursive: true, force: true }); } catch {}
+  });
+
+  it('check suppresses watcher-not-running when snoozed', () => {
+    // Create snooze file, no heartbeat or PID file
+    writeFileSync(join(tmpHome, '.icc', `watcher.${instanceName}.snoozed`), new Date().toISOString());
+    const stdout = runHook('check', { HOME: tmpHome });
+    assert.ok(!stdout.includes('[ICC] Watcher not running'), 'should NOT report watcher not running when snoozed');
+  });
+});
+
+describe('Snooze: session-end cleans up snooze file', () => {
+  let tmpHome: string;
+
+  beforeEach(() => {
+    tmpHome = mkdtempSync(join(tmpdir(), 'icc-hb-test-'));
+    mkdirSync(join(tmpHome, '.icc'), { recursive: true });
+  });
+
+  afterEach(() => {
+    try { rmSync(tmpHome, { recursive: true, force: true }); } catch {}
+  });
+
+  it('session-end removes snooze file', () => {
+    writeFileSync(join(tmpHome, '.icc', `watcher.${instanceName}.snoozed`), new Date().toISOString());
+    runHook('session-end', { HOME: tmpHome });
+    const snoozePath = join(tmpHome, '.icc', `watcher.${instanceName}.snoozed`);
+    assert.ok(!existsSync(snoozePath), 'snooze file should be deleted on session-end');
+  });
+});
+
+describe('Instance-specific blocking', () => {
+  let tmpHome: string;
+
+  beforeEach(() => {
+    tmpHome = mkdtempSync(join(tmpdir(), 'icc-hb-test-'));
+    mkdirSync(join(tmpHome, '.icc'), { recursive: true });
+  });
+
+  afterEach(() => {
+    try { rmSync(tmpHome, { recursive: true, force: true }); } catch {}
+  });
+
+  it('other instance watcher does not block this instance', () => {
+    // Create a PID file for a DIFFERENT instance with a live PID (PID 1 = init, always alive)
+    writeFileSync(join(tmpHome, '.icc', 'watcher.other-project.pid'), '1');
+    writeFileSync(join(tmpHome, '.icc', 'watcher.other-project.heartbeat'), new Date().toISOString());
+
+    // This instance's watcher should start despite other instance having an active watcher
+    const stdout = runHook('watch', { HOME: tmpHome }, ['--timeout', '1', '--interval', '1']);
+    assert.ok(stdout.includes('[ICC] Watcher cycled'), 'should run watcher despite other instance having one');
+    assert.ok(!stdout.includes('already active'), 'should NOT report already active');
+  });
+});
+
 describe('Hook: subagent-context', () => {
   let tmpHome: string;
 

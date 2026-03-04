@@ -476,22 +476,21 @@ function isWatcherAlive(instanceName: string): boolean {
   }
 }
 
-/**
- * Check if ANY watcher process is alive across all instances.
- * Prevents duplicate watchers when cwd changes (e.g. worktree → main),
- * which changes instanceName and bypasses instance-specific PID checks.
- */
-function isAnyWatcherAlive(): boolean {
-  const iccDir = join(homedir(), '.icc');
-  try {
-    const files = readdirSync(iccDir);
-    for (const f of files) {
-      if (!f.startsWith('watcher.') || !f.endsWith('.pid')) continue;
-      const inst = f.slice('watcher.'.length, -'.pid'.length);
-      if (isWatcherAlive(inst)) return true;
-    }
-  } catch { /* dir may not exist */ }
-  return false;
+
+function snoozePath(instanceName: string): string {
+  return join(homedir(), '.icc', `watcher.${instanceName}.snoozed`);
+}
+
+function isWatcherSnoozed(instanceName: string): boolean {
+  return existsSync(snoozePath(instanceName));
+}
+
+function snoozeWatcher(instanceName: string): void {
+  try { writeFileSync(snoozePath(instanceName), new Date().toISOString()); } catch {}
+}
+
+function wakeWatcher(instanceName: string): void {
+  try { unlinkSync(snoozePath(instanceName)); } catch {}
 }
 
 /**
@@ -553,6 +552,13 @@ async function hook() {
           }
         }
       } catch { /* non-fatal */ }
+      // Clear stale snooze from crashed sessions. If the session instance file
+      // already exists for our PID, this is a mid-session re-fire (/clear or
+      // resume) — preserve the user's snooze preference.
+      const isRefire = existsSync(sessionInstancePath(getClaudeCodePid()));
+      if (!isRefire) {
+        wakeWatcher(instanceName);
+      }
       // Write a provisional heartbeat so that `check` (which may fire before
       // the watcher process starts) does not falsely report "Watcher not running".
       // The watcher will overwrite this with its own heartbeat once it starts;
@@ -591,7 +597,11 @@ async function hook() {
       // Check signal files → stdout
       const signal = checkSignalFiles(instanceName);
       if (signal) process.stdout.write(signal + '\n');
-      process.stdout.write('[ICC] Start mail watcher\n');
+      if (isWatcherSnoozed(instanceName)) {
+        process.stdout.write('[ICC] Watcher snoozed\n');
+      } else {
+        process.stdout.write('[ICC] Start mail watcher\n');
+      }
       break;
     }
 
@@ -600,7 +610,7 @@ async function hook() {
       const signal = checkSignalFiles(instanceName);
       if (signal) process.stdout.write(signal + '\n');
       // Check watcher liveness → stdout if not running
-      if (!isHeartbeatFresh(instanceName) && !isWatcherAlive(instanceName)) {
+      if (!isWatcherSnoozed(instanceName) && !isHeartbeatFresh(instanceName) && !isWatcherAlive(instanceName)) {
         process.stdout.write('[ICC] Watcher not running\n');
       }
       break;
@@ -627,10 +637,10 @@ async function hook() {
       // All file operations use absolute paths (~/.icc/...), so cwd is irrelevant.
       try { process.chdir(homedir()); } catch { /* non-fatal */ }
 
-      // Guard: if any watcher process is already alive, exit immediately.
-      // Uses isAnyWatcherAlive() to catch cross-instance duplicates
-      // (e.g. watcher launched from worktree, then cwd changes to main).
-      if (isAnyWatcherAlive()) {
+      // Guard: if this instance's watcher is already alive, exit immediately.
+      // Instance-specific check is safe because getSessionInstanceName()
+      // provides stable identity even when cwd changes (worktrees).
+      if (isWatcherAlive(instanceName)) {
         process.stdout.write('[ICC] Watcher already active — do not spawn another\n');
         break;
       }
@@ -718,6 +728,7 @@ async function hook() {
       deleteWatcherPid(instanceName);
       deleteHeartbeat(instanceName);
       deleteSessionInstance();
+      wakeWatcher(instanceName);  // Remove snooze file — clean slate for next session
       break;
     }
 
@@ -759,7 +770,7 @@ async function hook() {
 
       // Guard 2: Prevent duplicate watcher launches
       if (/icc\s+hook\s+watch\b/.test(command) && !/--timeout\s+[012]\b/.test(command)) {
-        if (isAnyWatcherAlive()) {
+        if (isWatcherAlive(instanceName)) {
           const out = JSON.stringify({
             hookSpecificOutput: {
               hookEventName: 'PreToolUse',
@@ -797,9 +808,21 @@ async function hook() {
       break;
     }
 
+    case 'snooze-watcher': {
+      snoozeWatcher(instanceName);
+      process.stdout.write(`[ICC] Watcher snoozed for ${instanceName}\n`);
+      break;
+    }
+
+    case 'wake-watcher': {
+      wakeWatcher(instanceName);
+      process.stdout.write('[ICC] Start mail watcher\n');
+      break;
+    }
+
     default:
       console.error(`Unknown hook subcommand: ${subcommand}`);
-      console.error('Usage: icc hook <startup|check|shutdown|watch|session-end|subagent-context|pre-bash|pre-icc-message>');
+      console.error('Usage: icc hook <startup|check|shutdown|watch|session-end|subagent-context|pre-bash|pre-icc-message|snooze-watcher|wake-watcher>');
       process.exit(1);
   }
 }
