@@ -639,7 +639,7 @@ export function createMCPServer() {
   server.registerTool(
     'run_remote_command',
     {
-      description: 'Execute a command on the remote ICC host. Requires `security.execEnabled: true` in the remote server\'s config (disabled by default). Default allowed commands: ls, cat, head, tail, find, grep, git, node, npm. Only the base command name is validated; arguments are unrestricted.',
+      description: 'Execute a command on the remote ICC host. Requires `security.execEnabled: true` in the remote server\'s config (disabled by default). Default allowed commands: ls, cat, head, tail, find, grep, git. Only the base command name is validated; arguments are unrestricted.',
       inputSchema: z.object({
         command: z.string().describe('Base command name to execute (e.g. \'git\', \'ls\'). Must be in the remote server\'s allow-list.'),
         args: z.array(z.string()).optional().describe('Command arguments as separate strings (e.g. [\'status\', \'--short\'], not \'status --short\')'),
