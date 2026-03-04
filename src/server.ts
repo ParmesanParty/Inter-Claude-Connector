@@ -5,7 +5,7 @@ import { readFileSync, existsSync, statSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { timingSafeEqual } from 'node:crypto';
-import { loadConfig, getFullAddress, getOutboundToken, getTlsOptions } from './config.ts';
+import { loadConfig, getFullAddress, getOutboundToken, getTlsOptions, writeConfig } from './config.ts';
 import { buildAddress, parseAddress } from './address.ts';
 import { validate, createPong, serialize } from './protocol.ts';
 import { createLogger } from './util/logger.ts';
@@ -608,6 +608,50 @@ export function createICCServer(options: ICCServerOptions = {}): ICCServer {
         }
         const deleted = inboxRemove(ids);
         sendJSON(res, 200, { ok: true, deleted });
+      } catch (err) {
+        sendJSON(res, 400, { error: (err as Error).message });
+      }
+      return;
+    }
+
+    // POST /api/mesh-update — CA pushes peer config changes
+    if (method === 'POST' && url === '/api/mesh-update') {
+      try {
+        const caIdentity = config.tls?.ca;
+        if (!caIdentity || auth.identity !== caIdentity) {
+          sendJSON(res, 403, { error: 'Only the CA can push mesh updates' });
+          return;
+        }
+
+        const body = JSON.parse(await readBody(req));
+        const { action, peer, outboundToken } = body;
+
+        if (action === 'add-peer') {
+          if (!peer?.identity || !peer?.httpsUrl || !peer?.peerToken || !outboundToken) {
+            sendJSON(res, 400, { error: 'Missing required fields: peer.identity, peer.httpsUrl, peer.peerToken, outboundToken' });
+            return;
+          }
+
+          if (!config.remotes) config.remotes = {};
+          config.remotes[peer.identity] = { httpUrl: peer.httpsUrl, token: outboundToken };
+          if (!config.server.peerTokens) config.server.peerTokens = {};
+          config.server.peerTokens[peer.identity] = peer.peerToken;
+
+          writeConfig(config);
+
+          inboxPush({
+            from: `${caIdentity}/ca`,
+            to: config.identity,
+            body: `[TOPIC: mesh] New peer "${peer.identity}" added by CA at ${peer.httpsUrl}`,
+            status: 'FYI_ONLY',
+          });
+
+          log.info(`Mesh update: added peer "${peer.identity}" from CA "${caIdentity}"`);
+          sendJSON(res, 200, { ok: true, peer: peer.identity });
+          return;
+        }
+
+        sendJSON(res, 400, { error: `Unknown action: ${action}` });
       } catch (err) {
         sendJSON(res, 400, { error: (err as Error).message });
       }

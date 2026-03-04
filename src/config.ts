@@ -1,4 +1,4 @@
-import { readFileSync, statSync } from 'node:fs';
+import { readFileSync, statSync, writeFileSync, mkdirSync, chmodSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
@@ -80,6 +80,14 @@ export function loadConfig({ reload = false } = {}): ICCConfig {
 
 export function getConfigPath(): string {
   return USER_CONFIG_PATH;
+}
+
+export function writeConfig(config: ICCConfig): void {
+  const dir = join(homedir(), '.icc');
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(USER_CONFIG_PATH, JSON.stringify(config, null, 2) + '\n');
+  try { chmodSync(USER_CONFIG_PATH, 0o600); } catch { /* Windows */ }
+  _cachedConfig = config;
 }
 
 export function getFullAddress(config: ICCConfig): string {
