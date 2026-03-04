@@ -6,10 +6,8 @@ import {
 } from '../src/protocol.ts';
 import { clearConfigCache } from '../src/config.ts';
 
-// Set a test identity so protocol can create messages
-process.env.ICC_IDENTITY = 'test-host';
-
 beforeEach(() => {
+  process.env.ICC_IDENTITY = 'test-host';
   clearConfigCache();
 });
 

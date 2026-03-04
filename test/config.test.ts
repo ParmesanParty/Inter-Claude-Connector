@@ -1,43 +1,41 @@
 import { describe, it, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { clearConfigCache, loadConfig, getTlsOptions } from '../src/config.ts';
+import { withEnv } from './helpers.ts';
 
 beforeEach(() => {
   clearConfigCache();
 });
 
 describe('env overrides for identity and host', () => {
-  it('ICC_IDENTITY empty string preserves existing identity', () => {
-    process.env.ICC_IDENTITY = '';
-    clearConfigCache();
-    const config = loadConfig();
-    config.remotes = {};
-    // Empty string should NOT null out identity — keep the default
-    assert.equal(typeof config.identity, 'string');
-    assert.ok(config.identity.length > 0);
-    delete process.env.ICC_IDENTITY;
-    clearConfigCache();
+  it('ICC_IDENTITY empty string preserves existing identity', async () => {
+    await withEnv({ ICC_IDENTITY: '' }, () => {
+      clearConfigCache();
+      const config = loadConfig();
+      config.remotes = {};
+      // Empty string should NOT null out identity — keep the default
+      assert.equal(typeof config.identity, 'string');
+      assert.ok(config.identity.length > 0);
+    });
   });
 
-  it('ICC_HOST empty string preserves existing host', () => {
-    process.env.ICC_HOST = '';
-    clearConfigCache();
-    const config = loadConfig();
-    config.remotes = {};
-    assert.equal(typeof config.server.host, 'string');
-    assert.ok(config.server.host.length > 0);
-    delete process.env.ICC_HOST;
-    clearConfigCache();
+  it('ICC_HOST empty string preserves existing host', async () => {
+    await withEnv({ ICC_HOST: '' }, () => {
+      clearConfigCache();
+      const config = loadConfig();
+      config.remotes = {};
+      assert.equal(typeof config.server.host, 'string');
+      assert.ok(config.server.host.length > 0);
+    });
   });
 
-  it('ICC_IDENTITY non-empty string overrides identity', () => {
-    process.env.ICC_IDENTITY = 'test-override';
-    clearConfigCache();
-    const config = loadConfig();
-    config.remotes = {};
-    assert.equal(config.identity, 'test-override');
-    delete process.env.ICC_IDENTITY;
-    clearConfigCache();
+  it('ICC_IDENTITY non-empty string overrides identity', async () => {
+    await withEnv({ ICC_IDENTITY: 'test-override' }, () => {
+      clearConfigCache();
+      const config = loadConfig();
+      config.remotes = {};
+      assert.equal(config.identity, 'test-override');
+    });
   });
 });
 
@@ -60,13 +58,12 @@ describe('TLS config helpers', () => {
     assert.throws(() => getTlsOptions(config), /ENOENT/);
   });
 
-  it('env override ICC_TLS_ENABLED sets server.tls.enabled', () => {
-    process.env.ICC_TLS_ENABLED = 'true';
-    clearConfigCache();
-    const config = loadConfig();
-    config.remotes = {};
-    assert.equal(config.server.tls.enabled, true);
-    delete process.env.ICC_TLS_ENABLED;
-    clearConfigCache();
+  it('env override ICC_TLS_ENABLED sets server.tls.enabled', async () => {
+    await withEnv({ ICC_TLS_ENABLED: 'true' }, () => {
+      clearConfigCache();
+      const config = loadConfig();
+      config.remotes = {};
+      assert.equal(config.server.tls.enabled, true);
+    });
   });
 });

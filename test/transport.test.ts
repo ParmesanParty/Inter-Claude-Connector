@@ -3,9 +3,8 @@ import assert from 'node:assert/strict';
 import { clearConfigCache } from '../src/config.ts';
 import type { HTTPTransport } from '../src/transport/http.ts';
 
-process.env.ICC_IDENTITY = 'test-host';
-
 beforeEach(() => {
+  process.env.ICC_IDENTITY = 'test-host';
   clearConfigCache();
 });
 
