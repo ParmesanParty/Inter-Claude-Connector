@@ -1,12 +1,80 @@
 import { createServer, request as httpRequest } from 'node:http';
 import { request as httpsRequest } from 'node:https';
 import type { IncomingMessage, ServerResponse } from 'node:http';
+import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { loadConfig, getPeerIdentities, getFullAddress, getTlsOptions, createIdentityVerifier } from './config.ts';
 import { createLogger } from './util/logger.ts';
 import { readBody } from './util/http.ts';
 import type { ICCConfig } from './types.ts';
 
 const log = createLogger('web');
+
+// ── Session auth ────────────────────────────────────────────────────
+
+const sessions = new Map<string, { createdAt: number }>();
+const SESSION_TTL = 24 * 60 * 60 * 1000; // 24 hours
+
+function createSession(): string {
+  const id = randomBytes(32).toString('hex');
+  sessions.set(id, { createdAt: Date.now() });
+  return id;
+}
+
+function isValidSession(cookieHeader: string | undefined): boolean {
+  if (!cookieHeader) return false;
+  const match = cookieHeader.match(/icc-session=([a-f0-9]{64})/);
+  if (!match) return false;
+  const session = sessions.get(match[1]!);
+  if (!session) return false;
+  if (Date.now() - session.createdAt > SESSION_TTL) {
+    sessions.delete(match[1]!);
+    return false;
+  }
+  return true;
+}
+
+function safeTokenEquals(a: string, b: string): boolean {
+  const bufA = Buffer.from(a);
+  const bufB = Buffer.from(b);
+  if (bufA.length !== bufB.length) {
+    timingSafeEqual(bufA, bufA);
+    return false;
+  }
+  return timingSafeEqual(bufA, bufB);
+}
+
+function getLoginHTML(): string {
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ICC — Login</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'SF Mono', 'Cascadia Code', monospace; background: #0d1117; color: #e6edf3; height: 100vh; display: flex; align-items: center; justify-content: center; }
+  .login-box { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 32px; width: 340px; }
+  h1 { font-size: 16px; color: #58a6ff; margin-bottom: 20px; text-align: center; }
+  label { font-size: 12px; color: #8b949e; display: block; margin-bottom: 6px; }
+  input[type="password"] { width: 100%; padding: 8px 12px; background: #0d1117; border: 1px solid #30363d; border-radius: 4px; color: #e6edf3; font-family: inherit; font-size: 13px; margin-bottom: 16px; }
+  input[type="password"]:focus { outline: none; border-color: #58a6ff; }
+  button { width: 100%; padding: 8px; background: #238636; border: none; border-radius: 4px; color: #fff; font-family: inherit; font-size: 13px; cursor: pointer; }
+  button:hover { background: #2ea043; }
+  .error { color: #f85149; font-size: 12px; margin-bottom: 12px; text-align: center; }
+</style>
+</head>
+<body>
+<div class="login-box">
+  <h1>ICC — Inter-Claude Connector</h1>
+  <form method="POST" action="/login">
+    <label for="token">Local Token</label>
+    <input type="password" id="token" name="token" placeholder="Enter your localToken" autofocus>
+    <button type="submit">Sign In</button>
+  </form>
+</div>
+</body>
+</html>`;
+}
 
 interface ProxyTarget {
   baseUrl: string;
@@ -973,11 +1041,44 @@ interface WebServerOptions {
 
 export function createWebServer(options: WebServerOptions = {}) {
   const config = loadConfig();
-  const port = options.port ?? 3180;
-  const host = options.host ?? '0.0.0.0';
+  const port = options.port ?? config.web?.port ?? 3180;
+  const host = options.host ?? config.web?.host ?? '127.0.0.1';
   const handler = async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
     const { method } = req;
     const url = req.url || '/';
+
+    // POST /login — session auth
+    if (method === 'POST' && url === '/login') {
+      const body = await readBody(req);
+      const params = new URLSearchParams(body);
+      const token = params.get('token') || '';
+      const localToken = config.server.localToken;
+
+      if (!localToken || !safeTokenEquals(token, localToken)) {
+        res.writeHead(401, { 'Content-Type': 'text/html' });
+        res.end('<h1>Invalid token</h1>');
+        return;
+      }
+
+      const sessionId = createSession();
+      res.writeHead(302, {
+        'Set-Cookie': `icc-session=${sessionId}; HttpOnly; SameSite=Strict; Path=/`,
+        'Location': '/',
+      });
+      res.end();
+      return;
+    }
+
+    // Session check — if localToken is configured, require valid session
+    if (config.server.localToken && !isValidSession(req.headers.cookie)) {
+      const html = getLoginHTML();
+      res.writeHead(200, {
+        'Content-Type': 'text/html; charset=utf-8',
+        'Content-Length': Buffer.byteLength(html),
+      });
+      res.end(html);
+      return;
+    }
 
     // Proxy route: /proxy/:peer/api/*
     const reqUrl = new URL(url, 'http://localhost');

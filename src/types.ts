@@ -45,6 +45,11 @@ export interface ServerConfig {
   corsOrigins?: string[];
 }
 
+export interface WebConfig {
+  host: string;
+  port: number;
+}
+
 export interface TransportConfig {
   httpTimeout: number;
   healthCheckInterval: number;
@@ -77,6 +82,7 @@ export interface ICCConfig {
   instance: string | null;
   remotes: Record<string, RemoteConfig>;
   server: ServerConfig;
+  web: WebConfig;
   tls: { ca: string | null };
   transport: TransportConfig;
   security: SecurityConfig;

@@ -16,6 +16,10 @@
     "enrollPort": 4179,
     "corsOrigins": ["http://localhost:3180"]
   },
+  "web": {
+    "host": "127.0.0.1",
+    "port": 3180
+  },
   "tls": {
     "ca": null
   },
