@@ -4,48 +4,29 @@ Step-by-step guide for joining the ICC mesh as a new peer. All commands
 are run locally on the new host — ICC's philosophy is that each host
 controls itself.
 
-## Quick Onboarding (Recommended)
+Two paths are available:
 
-If the CA host is online and has the enrollment server running, the
-entire process is two commands:
+- **Path A: Quick onboarding** — uses `icc invite` (on CA) + `icc join`
+  (on new host) to automate TLS enrollment, token exchange, and mesh
+  updates. Requires the CA host to be online with its enrollment server
+  running.
+- **Path B: Manual setup** — configure tokens, remotes, and TLS
+  enrollment step by step. Use when the CA is offline or you need
+  fine-grained control.
 
-**On the CA host:**
-
-```bash
-icc invite <new-host-identity> --ip <new-host-ip>
-# Prints a join command with a one-time token (valid 15 minutes)
-```
-
-**On the new host** (after steps 1-4 below):
-
-```bash
-icc join <ca-url> <join-token> --identity <your-identity> --ip <your-ip>
-```
-
-This automatically:
-- Generates an Ed25519 keypair and CSR
-- Authenticates with the join token
-- Gets a CA-signed certificate
-- Configures TLS, peer tokens, and CA identity
-- Pushes mesh updates to all existing peers
-
-After `icc join` completes, start the server and configure Claude Code
-(steps 6 and 8 below).
+Both paths share the same prerequisites and post-join steps.
 
 ---
-
-For manual setup (CA offline, or advanced configuration), follow all
-steps below.
 
 ## Prerequisites
 
 - The new host's hostname or IP must be reachable from existing peers
-- An existing peer to coordinate token exchange and TLS enrollment with
+- An existing peer to coordinate with (the CA host, for Path A)
 
-## 1. Install Git and Node.js
+### 1. Install system dependencies
 
-ICC requires Git (for pulling code), Node.js 24, and C/C++ build tools
-(for the `better-sqlite3` native addon).
+ICC requires Git, Node.js 24, and C/C++ build tools (for the
+`better-sqlite3` native addon).
 
 ```bash
 # Debian/Ubuntu
@@ -62,14 +43,14 @@ curl -fsSL https://deb.nodesource.com/setup_24.x | sudo -E bash -
 sudo apt-get install -y nodejs
 ```
 
-Record the node path for step 6 (systemd needs the absolute path):
+Record the node path (systemd needs the absolute path):
 
 ```bash
 which node
 # e.g. /usr/bin/node (system), ~/.nvm/versions/node/v24.x.x/bin/node (nvm)
 ```
 
-## 2. Install Claude Code
+### 2. Install Claude Code
 
 Install the native build of Claude Code (recommended over npm):
 
@@ -88,7 +69,7 @@ claude --version
 Then authenticate by running `claude` and following the browser prompts.
 A Pro, Max, Teams, Enterprise, or Console account is required.
 
-## 3. Clone the Repository
+### 3. Clone the repository
 
 ```bash
 mkdir -p ~/code
@@ -100,7 +81,7 @@ npm install
 
 All ICC hosts use `~/code/inter-claude-connector/` as the project path.
 
-## 4. npm link (for `icc` CLI command)
+### 4. npm link (for `icc` CLI command)
 
 ```bash
 cd ~/code/inter-claude-connector
@@ -113,62 +94,7 @@ Verify: `icc help`
 use `node ~/code/inter-claude-connector/bin/icc.ts` directly in hooks
 and service files.
 
-## 5. Initialize ICC Config
-
-### 5a. Create your config
-
-```bash
-icc init --identity <your-identity>
-```
-
-This generates `~/.icc/config.json` with a `localToken` (for MCP/hooks).
-Choose an identity that's short and memorable (e.g. `laptop`, `server`,
-`desktop`).
-
-### 5b. Exchange per-peer auth tokens
-
-ICC uses per-peer auth tokens. Each host pair needs a bilateral token
-exchange — you generate a token for them, they generate one for you.
-
-**On your host**, generate a token that the existing peer will use when
-connecting to you:
-
-```bash
-icc init --peer <existing-peer-identity>
-# Output: Generated peer token for "<peer>": <token-A>
-# This token goes into the peer's config as: remotes.<your-identity>.token=<token-A>
-```
-
-Send `<token-A>` to the peer operator (out-of-band: chat, email, etc.).
-
-**From the peer operator**, you'll receive a token that you should use
-when connecting to them:
-
-```bash
-icc config --set remotes.<peer-identity>.token=<token-from-peer>
-```
-
-Repeat for every peer you want to connect to.
-
-### 5c. Configure remotes
-
-Add each peer to your config:
-
-```bash
-icc config --set remotes.<peer>.httpUrl=https://<peer-ip>:3179
-```
-
-Optionally enable remote file read and command execution:
-
-```bash
-icc config --set security.readfileEnabled=true
-icc config --set security.execEnabled=true
-```
-
-**Important:** Do NOT include yourself in `remotes` — only list other
-peers.
-
-## 6. Create systemd User Service
+### 5. Create systemd user service
 
 ```bash
 mkdir -p ~/.config/systemd/user
@@ -208,13 +134,115 @@ journalctl --user -u icc-server -n 5 --no-pager
 # Should see: "ICC server listening on HTTP 0.0.0.0:3179"
 ```
 
-## 7. TLS Certificate Enrollment
+The server must be running before joining the mesh — both paths require
+it for TLS challenge verification.
+
+---
+
+## Path A: Quick Onboarding (Recommended)
+
+Requires the CA host to be online with the enrollment server running
+(`icc-enroll.service` on port 4179).
+
+### A1. On the CA host
+
+```bash
+icc invite <new-host-identity> --ip <new-host-ip>
+# Prints a join command with a one-time token (valid 15 minutes)
+```
+
+### A2. On the new host
+
+Run the `icc join` command from the output above:
+
+```bash
+icc join <ca-url> <join-token> --identity <your-identity> --ip <your-ip>
+```
+
+This automatically:
+- Generates an Ed25519 keypair and CSR
+- Authenticates with the join token
+- Gets a CA-signed certificate
+- Configures TLS, peer tokens, and CA identity
+- Pushes mesh updates to all existing peers
+
+### A3. Restart with TLS
+
+```bash
+systemctl --user restart icc-server
+journalctl --user -u icc-server -n 3 --no-pager
+# Should see: "ICC server listening on HTTPS (mTLS) 0.0.0.0:3179"
+```
+
+Continue to [Configure Claude Code](#configure-claude-code).
+
+---
+
+## Path B: Manual Setup
+
+Use when the CA is offline, or you need fine-grained control over
+tokens, remotes, and TLS.
+
+### B1. Initialize ICC config
+
+```bash
+icc init --identity <your-identity>
+```
+
+This generates `~/.icc/config.json` with a `localToken` (for MCP/hooks).
+Choose an identity that's short and memorable (e.g. `laptop`, `server`,
+`desktop`).
+
+### B2. Exchange per-peer auth tokens
+
+ICC uses per-peer auth tokens. Each host pair needs a bilateral token
+exchange — you generate a token for them, they generate one for you.
+
+**On your host**, generate a token that the existing peer will use when
+connecting to you:
+
+```bash
+icc init --peer <existing-peer-identity>
+# Output: Generated peer token for "<peer>": <token-A>
+# This token goes into the peer's config as: remotes.<your-identity>.token=<token-A>
+```
+
+Send `<token-A>` to the peer operator (out-of-band: chat, email, etc.).
+
+**From the peer operator**, you'll receive a token that you should use
+when connecting to them:
+
+```bash
+icc config --set remotes.<peer-identity>.token=<token-from-peer>
+```
+
+Repeat for every peer you want to connect to.
+
+### B3. Configure remotes
+
+Add each peer to your config:
+
+```bash
+icc config --set remotes.<peer>.httpUrl=https://<peer-ip>:3179
+```
+
+Optionally enable remote file read and command execution:
+
+```bash
+icc config --set security.readfileEnabled=true
+icc config --set security.execEnabled=true
+```
+
+**Important:** Do NOT include yourself in `remotes` — only list other
+peers.
+
+### B4. TLS certificate enrollment
 
 ICC uses mTLS (mutual TLS) for all peer-to-peer HTTP communication.
 Certificates are provisioned via an HTTP-01 style enrollment protocol.
 One host in the mesh acts as the Certificate Authority (CA).
 
-### How enrollment works
+#### How enrollment works
 
 1. You generate an Ed25519 keypair and CSR
 2. The enrollment server (`<ca-host>:4179`) issues a random challenge token
@@ -223,9 +251,22 @@ One host in the mesh acts as the Certificate Authority (CA).
    verify proof of control
 5. Once verified, the CA signs the CSR and returns your certificate
 
-### On your host
+#### What the CA operator needs to do first
 
-Your ICC server must be running (step 6) before enrollment — the CA
+The CA operator must add your host before you can enroll:
+
+```bash
+icc config --set remotes.<your-identity>.httpUrl=http://<your-ip>:3179
+icc init --peer <your-identity>
+systemctl --user restart icc-enroll
+```
+
+**Note:** The httpUrl uses `http://` here because you don't have a TLS
+cert yet. The CA operator updates it to `https://` after enrollment.
+
+#### On your host
+
+Your ICC server must be running (step 5) before enrollment — the CA
 will connect to it to verify the challenge.
 
 ```bash
@@ -280,46 +321,35 @@ journalctl --user -u icc-server -n 3 --no-pager
 # Should see: "ICC server listening on HTTPS (mTLS) 0.0.0.0:3179"
 ```
 
-### What the CA operator needs to do
+The CA operator should also update your URL to HTTPS on their end:
 
-The CA operator must do two things before you can enroll:
+```bash
+icc config --set remotes.<your-identity>.httpUrl=https://<your-ip>:3179
+systemctl --user restart icc-server
+```
 
-1. **Add your host to the CA's remotes** — the enrollment server builds
-   its known-peer list from `config.remotes`:
+### B5. Coordinate with existing peers
 
-   ```bash
-   icc config --set remotes.<your-identity>.httpUrl=http://<your-ip>:3179
-   icc init --peer <your-identity>
-   systemctl --user restart icc-enroll
-   ```
+Every existing peer needs your identity added to their `remotes`. Send
+each peer operator:
 
-   **Note:** The httpUrl should use `http://` here because you don't
-   have a TLS cert yet. The CA operator updates it to `https://` after
-   enrollment completes.
+- Your identity name
+- Your IP address or hostname
+- The outbound token you generated for them (from step B2)
 
-2. **Update your URL to HTTPS after enrollment:**
+They will run on their end:
 
-   ```bash
-   icc config --set remotes.<your-identity>.httpUrl=https://<your-ip>:3179
-   systemctl --user restart icc-server
-   ```
+```bash
+icc config --set remotes.<your-identity>.httpUrl=https://<your-ip>:3179
+icc config --set remotes.<your-identity>.token=<token-you-gave-them>
+systemctl --user restart icc-server
+```
 
-### TLS gotchas
+Continue to [Configure Claude Code](#configure-claude-code).
 
-- **Identity verification, not hostname verification:** ICC certs use
-  `CN=<identity>` without IP-based SANs. `createIdentityVerifier()`
-  checks the cert CN matches the expected peer identity — we care about
-  WHO we're talking to, not what IP they're on.
+---
 
-- **Chicken-and-egg problem:** When enabling mTLS, HTTP connections
-  break for peers that haven't switched yet. Enable TLS on all hosts,
-  then restart them together. Using `icc join` avoids this entirely.
-
-- **Enrollment server stays HTTP:** The enrollment server (port 4179)
-  is intentionally plain HTTP — it's only used for initial cert
-  provisioning, and the enrolling peer doesn't have a cert yet.
-
-## 8. Configure Claude Code
+## Configure Claude Code
 
 Three files need to be set up: MCP server config (`~/.claude.json`),
 lifecycle hooks (`~/.claude/settings.json`), and watcher instructions
@@ -337,27 +367,7 @@ binary, home directory), and write all three config files.
 See [`docs/claude-code-setup.md`](claude-code-setup.md) for the full
 configuration reference if you prefer to set up manually.
 
-## 9. Coordinate with Existing Peers
-
-**If you used `icc join`:** This step is automatic — the CA pushes
-mesh updates to all existing peers with bidirectional auth tokens.
-
-**If you used manual setup:** Every existing peer needs your identity
-added to their `remotes`. Send each peer operator:
-
-- Your identity name
-- Your IP address or hostname
-- The outbound token you generated for them (from step 5b)
-
-They will run on their end:
-
-```bash
-icc config --set remotes.<your-identity>.httpUrl=https://<your-ip>:3179
-icc config --set remotes.<your-identity>.token=<token-you-gave-them>
-systemctl --user restart icc-server
-```
-
-## 10. Verify
+## Verify
 
 ```bash
 # Check ICC status
@@ -370,7 +380,7 @@ icc status --peer <peer-identity>
 icc send --peer <peer-identity> "Reply with: hello"
 ```
 
-## 11. Updating ICC
+## Updating ICC
 
 When new code is available, pull and restart:
 
@@ -383,6 +393,8 @@ systemctl --user restart icc-server
 
 If you use `npm link`, the `icc` CLI picks up changes automatically
 after pulling. No need to re-link.
+
+---
 
 ## Quick Reference: File Locations
 
@@ -419,6 +431,21 @@ CA-only (run on the CA host):
 icc tls init               # Initialize CA (one-time)
 icc tls serve              # Start enrollment server (runs as systemd)
 ```
+
+## TLS Gotchas
+
+- **Identity verification, not hostname verification:** ICC certs use
+  `CN=<identity>` without IP-based SANs. `createIdentityVerifier()`
+  checks the cert CN matches the expected peer identity — we care about
+  WHO we're talking to, not what IP they're on.
+
+- **Chicken-and-egg problem:** When enabling mTLS, HTTP connections
+  break for peers that haven't switched yet. Enable TLS on all hosts,
+  then restart them together. Using `icc join` avoids this entirely.
+
+- **Enrollment server stays HTTP:** The enrollment server (port 4179)
+  is intentionally plain HTTP — it's only used for initial cert
+  provisioning, and the enrolling peer doesn't have a cert yet.
 
 ## Known Limitations
 
