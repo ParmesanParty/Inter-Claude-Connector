@@ -7,6 +7,7 @@ import { clearConfigCache, loadConfig, resetConfigPath } from '../src/config.ts'
 import { createICCServer } from '../src/server.ts';
 import { reset as resetLog } from '../src/log.ts';
 import { reset as resetInbox, init as initInbox } from '../src/inbox.ts';
+import { closeInboxDb } from '../src/inbox-db.ts';
 import type { TlsConfig, ICCConfig } from '../src/types.ts';
 
 // ── Test Environment ────────────────────────────────────────────────
@@ -28,7 +29,10 @@ export function createTestEnv(prefix = 'icc-test'): TestEnv {
   initInbox();
   return {
     dir,
-    cleanup() { try { rmSync(dir, { recursive: true, force: true }); } catch {} },
+    cleanup() {
+      closeInboxDb();
+      try { rmSync(dir, { recursive: true, force: true }); } catch {}
+    },
   };
 }
 
