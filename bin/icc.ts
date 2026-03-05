@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { randomBytes } from 'node:crypto';
 import { request } from 'node:http';
+import { httpJSON } from '../src/util/http.ts';
 
 const args = process.argv.slice(2);
 const command = args[0];
@@ -30,33 +31,6 @@ function parseFlags(args: string[]): { flags: Record<string, string | boolean>; 
 }
 
 const { flags, positional } = parseFlags(args.slice(1));
-
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-function httpJSON(url: string, method: string, body: unknown, token?: string | null): Promise<any> {
-  return new Promise((resolve, reject) => {
-    const urlObj = new URL(url);
-    const payload = JSON.stringify(body);
-    const req = request(urlObj, {
-      method,
-      timeout: 30000,
-      headers: {
-        'Content-Type': 'application/json',
-        'Content-Length': Buffer.byteLength(payload),
-        ...(token && { 'Authorization': `Bearer ${token}` }),
-      },
-    }, (res) => {
-      let data = '';
-      res.on('data', (chunk) => { data += chunk; });
-      res.on('end', () => {
-        try { resolve(JSON.parse(data)); } catch { resolve({ error: data }); }
-      });
-    });
-    req.on('error', (err) => reject(new Error(`Connection failed: ${err.message}`)));
-    req.on('timeout', () => { req.destroy(); reject(new Error('Request timed out')); });
-    req.write(payload);
-    req.end();
-  });
-}
 
 async function main() {
   switch (command) {
@@ -104,14 +78,24 @@ async function serve(): Promise<void> {
     noAuth: flags['no-auth'] as boolean | undefined,
   });
   await server.start();
-  // Keep process alive
+
+  // Write PID file for SIGHUP from `icc tls renew`
+  const pidPath = join(homedir(), '.icc', 'server.pid');
+  mkdirSync(join(homedir(), '.icc'), { recursive: true });
+  writeFileSync(pidPath, String(process.pid));
+
+  const cleanup = async () => {
+    try { unlinkSync(pidPath); } catch { /* ignore */ }
+    await server.stop();
+  };
+
   process.on('SIGINT', async () => {
     console.log('\nShutting down...');
-    await server.stop();
+    await cleanup();
     process.exit(0);
   });
   process.on('SIGTERM', async () => {
-    await server.stop();
+    await cleanup();
     process.exit(0);
   });
 }
@@ -1018,9 +1002,80 @@ async function tls() {
       break;
     }
 
+    case 'renew': {
+      const { needsRenewal, renewIfNeeded } = await import('../src/tls.ts');
+      const config = loadConfig();
+      const tlsDir = (flags.dir as string) || join(homedir(), '.icc', 'tls');
+      const identity = config.identity;
+      const threshold = flags.threshold ? parseInt(flags.threshold as string, 10) : 30;
+      const force = !!flags.force;
+      const certPath = join(tlsDir, 'server.crt');
+
+      if (!existsSync(certPath)) {
+        console.error('No server certificate found. Run "icc tls enroll" first.');
+        process.exit(1);
+      }
+
+      if (!force) {
+        const check = needsRenewal(certPath, threshold);
+        if (!check.needsRenewal) {
+          console.log(`No renewal needed (${check.daysRemaining} days remaining, threshold: ${threshold})`);
+          console.log(`  Expires: ${check.notAfter}`);
+          break;
+        }
+        console.log(`Certificate expires in ${check.daysRemaining} days (threshold: ${threshold})`);
+      }
+
+      // Determine CA enrollment URL
+      let caEnrollUrl: string | null;
+      if (existsSync(join(tlsDir, 'ca.key'))) {
+        caEnrollUrl = null; // CA host — self-sign
+      } else {
+        const caIdentity = (flags.ca as string) || config.tls?.ca;
+        if (!caIdentity) {
+          console.error('No CA specified. Use --ca <peer> or set tls.ca in config.');
+          process.exit(1);
+        }
+        const peer = config.remotes?.[caIdentity];
+        if (!peer?.httpUrl) {
+          console.error(`No httpUrl for CA peer "${caIdentity}".`);
+          process.exit(1);
+        }
+        const peerUrl = new URL(peer.httpUrl);
+        peerUrl.port = String(config.server.enrollPort || 4179);
+        caEnrollUrl = peerUrl.toString().replace(/\/$/, '');
+      }
+
+      console.log('Renewing certificate...');
+      const result = await renewIfNeeded({ tlsDir, identity, thresholdDays: threshold, caEnrollUrl, force });
+
+      if (result.renewed) {
+        console.log(`Certificate renewed! (${result.daysRemaining} days remaining)`);
+        console.log(`  Expires: ${result.notAfter}`);
+
+        // Signal server to reload TLS via PID file
+        const pidPath = join(homedir(), '.icc', 'server.pid');
+        if (existsSync(pidPath)) {
+          try {
+            const pid = parseInt(readFileSync(pidPath, 'utf-8').trim(), 10);
+            process.kill(pid, 'SIGHUP');
+            console.log(`Sent SIGHUP to server (PID ${pid}) — TLS context will reload`);
+          } catch (err) {
+            console.log(`Could not signal server: ${(err as Error).message}`);
+            console.log('Restart the server manually to use the new certificate.');
+          }
+        } else {
+          console.log('Server PID file not found. Restart the server manually to use the new certificate.');
+        }
+      } else {
+        console.log(`No renewal needed (${result.daysRemaining} days remaining)`);
+      }
+      break;
+    }
+
     default:
       console.error(`Unknown tls subcommand: ${subcommand || '(none)'}`);
-      console.error('Usage: icc tls <init|serve|enroll|enroll-self|status>');
+      console.error('Usage: icc tls <init|serve|enroll|enroll-self|renew|status>');
       process.exit(1);
   }
 }
@@ -1203,7 +1258,7 @@ Commands:
   config [--set key=value]                 Show or edit configuration
   hook <startup|check|shutdown|watch>      Lifecycle hooks for Claude Code sessions
   instance <resolve [dir]|list>            Manage persistent instance names
-  tls <init|serve|enroll|enroll-self|status>  TLS certificate management
+  tls <init|serve|enroll|enroll-self|renew|status>  TLS certificate management
   help                                      Show this help
 
 Options:
@@ -1223,6 +1278,8 @@ Examples:
   icc tls serve                            # start enrollment server on :4179
   icc tls enroll --ca desktop               # enroll with CA via HTTP-01
   icc tls enroll-self                      # CA host: generate own server cert
+  icc tls renew                            # renew cert if expiring within 30 days
+  icc tls renew --force                    # force renewal regardless of expiry
   icc tls status                           # show cert info
 `.trim());
 }

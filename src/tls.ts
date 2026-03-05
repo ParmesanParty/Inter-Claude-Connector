@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { readFileSync, writeFileSync, mkdirSync, unlinkSync, existsSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync, unlinkSync, existsSync, renameSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { createLogger } from './util/logger.ts';
@@ -107,6 +107,25 @@ interface CertInfo {
   notAfter?: string;
 }
 
+export function needsRenewal(certPath: string, thresholdDays = 30): {
+  needsRenewal: boolean;
+  daysRemaining: number;
+  notAfter: string;
+} {
+  const info = getCertInfo(certPath);
+  if (!info.notAfter) {
+    return { needsRenewal: true, daysRemaining: 0, notAfter: 'unknown' };
+  }
+  const expiry = new Date(info.notAfter).getTime();
+  const now = Date.now();
+  const daysRemaining = Math.floor((expiry - now) / (24 * 60 * 60 * 1000));
+  return {
+    needsRenewal: daysRemaining <= thresholdDays,
+    daysRemaining,
+    notAfter: info.notAfter,
+  };
+}
+
 export function getCertInfo(certPath: string): CertInfo {
   const text = execFileSync('openssl', [
     'x509', '-in', certPath, '-noout', '-subject', '-issuer', '-dates',
@@ -120,4 +139,82 @@ export function getCertInfo(certPath: string): CertInfo {
     else if (line.startsWith('notAfter=')) info.notAfter = line.slice('notAfter='.length).trim();
   }
   return info;
+}
+
+interface RenewOptions {
+  tlsDir: string;
+  identity: string;
+  thresholdDays?: number;
+  caEnrollUrl?: string | null; // null = CA host (self-sign), string = peer enrollment URL
+  force?: boolean;
+}
+
+interface RenewResult {
+  renewed: boolean;
+  daysRemaining: number;
+  notAfter: string;
+}
+
+export async function renewIfNeeded(options: RenewOptions): Promise<RenewResult> {
+  const { tlsDir, identity, thresholdDays = 30, caEnrollUrl, force = false } = options;
+  const certPath = join(tlsDir, 'server.crt');
+
+  // Check if renewal is needed
+  if (existsSync(certPath)) {
+    const check = needsRenewal(certPath, thresholdDays);
+    if (!check.needsRenewal && !force) {
+      return { renewed: false, daysRemaining: check.daysRemaining, notAfter: check.notAfter };
+    }
+  }
+
+  // Generate key+CSR in temp subdirectory to avoid clobbering working files
+  const tmpDir = join(tlsDir, '.renew-tmp');
+  try {
+    mkdirSync(tmpDir, { recursive: true });
+    const csr = generateKeyAndCSR(tmpDir, identity);
+
+    let cert: string;
+    if (caEnrollUrl === null) {
+      // CA host: self-sign
+      cert = signCSR(tlsDir, csr, identity);
+    } else if (caEnrollUrl) {
+      // Peer: HTTP-01 enrollment
+      const { httpJSON } = await import('./util/http.ts');
+
+      const enrollRes = await httpJSON(`${caEnrollUrl}/enroll`, 'POST', { identity });
+      if (!enrollRes.enrollmentId) {
+        throw new Error(`Enrollment failed: ${enrollRes.error || 'Unknown error'}`);
+      }
+
+      // Write challenge for ICC server to serve
+      writeFileSync(join(tlsDir, '.challenge'), enrollRes.challenge);
+
+      const csrRes = await httpJSON(`${caEnrollUrl}/enroll/csr`, 'POST', {
+        enrollmentId: enrollRes.enrollmentId,
+        csr,
+      });
+
+      try { unlinkSync(join(tlsDir, '.challenge')); } catch { /* ignore */ }
+
+      if (!csrRes.cert) {
+        throw new Error(`CSR signing failed: ${csrRes.error || 'Unknown error'}`);
+      }
+      cert = csrRes.cert;
+      if (csrRes.caCert) {
+        writeFileSync(join(tlsDir, 'ca.crt'), csrRes.caCert);
+      }
+    } else {
+      throw new Error('No CA configured — cannot renew');
+    }
+
+    // Atomic swap: rename temp key+cert over originals
+    renameSync(join(tmpDir, 'server.key'), join(tlsDir, 'server.key'));
+    writeFileSync(join(tlsDir, 'server.crt'), cert);
+
+    log.info(`Certificate renewed for "${identity}"`);
+    const info = needsRenewal(certPath, thresholdDays);
+    return { renewed: true, daysRemaining: info.daysRemaining, notAfter: info.notAfter };
+  } finally {
+    try { rmSync(tmpDir, { recursive: true, force: true }); } catch { /* cleanup */ }
+  }
 }

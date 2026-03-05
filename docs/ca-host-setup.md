@@ -103,7 +103,8 @@ This creates three files in `~/.icc/tls/`:
 | `ca.srl` | Serial number file — managed automatically |
 
 The CA certificate is valid for ~10 years. Peer certificates signed by
-this CA are valid for 1 year (re-enroll to renew).
+this CA are valid for 1 year (auto-renewed by the server when within 30
+days of expiry).
 
 Verify:
 
@@ -323,9 +324,13 @@ Per-identity: max 3 enrollment attempts per 15 minutes. Returns HTTP
   do not need to restart `icc-enroll`. You may need to restart
   `icc-server` if TLS config or remotes changed.
 
-- **Certificate renewal:** Peer certs expire after 1 year. Peers
-  re-enroll with `icc tls enroll --ca <ca-identity>` to get a new cert.
-  The CA cert is valid for 10 years.
+- **Certificate auto-renewal:** The ICC server automatically checks its
+  cert daily and renews when within 30 days of expiry. On the CA host,
+  renewal is a local self-sign (no network needed). Peer hosts use the
+  HTTP-01 enrollment protocol, so the enrollment server must be running.
+  A startup check also catches certs that aged while the server was down.
+  For manual renewal: `icc tls renew [--force]`. The CA cert (10 years)
+  is not auto-renewed.
 
 - **CA key security:** The `ca.key` file is the root of trust for the
   entire mesh. Protect it accordingly. If compromised, all peer

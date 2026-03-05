@@ -1,4 +1,5 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
+import { request } from 'node:http';
 
 const DEFAULT_MAX_BODY_SIZE = 1_048_576; // 1MB
 
@@ -17,6 +18,33 @@ export function readBody(req: IncomingMessage, maxSize = DEFAULT_MAX_BODY_SIZE):
     });
     req.on('end', () => resolve(body));
     req.on('error', reject);
+  });
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function httpJSON(url: string, method: string, body: unknown, token?: string | null): Promise<any> {
+  return new Promise((resolve, reject) => {
+    const urlObj = new URL(url);
+    const payload = JSON.stringify(body);
+    const req = request(urlObj, {
+      method,
+      timeout: 30000,
+      headers: {
+        'Content-Type': 'application/json',
+        'Content-Length': Buffer.byteLength(payload),
+        ...(token && { 'Authorization': `Bearer ${token}` }),
+      },
+    }, (res) => {
+      let data = '';
+      res.on('data', (chunk) => { data += chunk; });
+      res.on('end', () => {
+        try { resolve(JSON.parse(data)); } catch { resolve({ error: data }); }
+      });
+    });
+    req.on('error', (err) => reject(new Error(`Connection failed: ${err.message}`)));
+    req.on('timeout', () => { req.destroy(); reject(new Error('Request timed out')); });
+    req.write(payload);
+    req.end();
   });
 }
 

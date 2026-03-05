@@ -425,7 +425,10 @@ after pulling. No need to re-link.
 
 ```bash
 icc tls enroll --ca <ca-host>  # Enroll this host (generates keypair, gets cert signed)
-icc tls status             # Show cert info (subject, issuer, expiry)
+icc tls renew                  # Renew cert if expiring within 30 days
+icc tls renew --force          # Force renewal regardless of expiry
+icc tls renew --threshold 60   # Custom renewal window (days)
+icc tls status                 # Show cert info (subject, issuer, expiry)
 ```
 
 CA-only (run on the CA host):
@@ -453,9 +456,13 @@ icc tls serve              # Start enrollment server (runs as systemd)
 
 ## Known Limitations
 
-- **Server cert expiry:** Server certs are valid for 1 year.
-  Re-enrollment (`icc tls enroll --ca <ca-host>`) regenerates the keypair
-  and cert. The CA cert is valid for 10 years.
+- **Server cert auto-renewal:** The ICC server automatically checks its
+  certificate daily and renews it when within 30 days of expiry. CA hosts
+  self-sign; peer hosts use the HTTP-01 enrollment protocol (the enrollment
+  server must be reachable). A startup check also catches certs that aged
+  while the server was down. Use `icc tls renew` for manual/forced renewal
+  — it sends SIGHUP to the running server to hot-reload the TLS context.
+  The CA cert is valid for 10 years and is not auto-renewed.
 - **Web UI binds to localhost:** The web UI defaults to `127.0.0.1` and
   requires session auth with the `localToken`. Access from other machines
   requires a reverse proxy or SSH tunnel.

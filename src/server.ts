@@ -2,10 +2,11 @@ import { createServer, request as httpRequest } from 'node:http';
 import { createServer as createSecureServer, request as httpsRequest } from 'node:https';
 import type { IncomingMessage, ServerResponse, Server } from 'node:http';
 import { readFileSync, existsSync, statSync, unlinkSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, dirname } from 'node:path';
 import { homedir } from 'node:os';
 import { timingSafeEqual } from 'node:crypto';
-import { loadConfig, getFullAddress, getOutboundToken, getTlsOptions, writeConfig } from './config.ts';
+import { loadConfig, getFullAddress, getOutboundToken, getTlsOptions, writeConfig, clearConfigCache } from './config.ts';
+import { renewIfNeeded } from './tls.ts';
 import { buildAddress, parseAddress } from './address.ts';
 import { validate, createPong, serialize } from './protocol.ts';
 import { createLogger } from './util/logger.ts';
@@ -167,6 +168,17 @@ interface ICCServer {
   start(): Promise<{ port: number; host: string }>;
   stop(): Promise<void>;
   server: Server;
+}
+
+function buildCaEnrollUrl(config: ICCConfig, tlsDir: string): string | null {
+  if (existsSync(join(tlsDir, 'ca.key'))) return null; // CA host — self-sign
+  const caId = config.tls?.ca;
+  if (!caId) return null; // no CA configured
+  const peer = config.remotes?.[caId];
+  if (!peer?.httpUrl) return null;
+  const url = new URL(peer.httpUrl);
+  url.port = String(config.server.enrollPort || 4179);
+  return url.toString().replace(/\/$/, '');
 }
 
 export function createICCServer(options: ICCServerOptions = {}): ICCServer {
@@ -667,6 +679,32 @@ export function createICCServer(options: ICCServerOptions = {}): ICCServer {
 
   const CLEANUP_INTERVAL_MS = 24 * 60 * 60 * 1000; // 24 hours
   let cleanupTimer: ReturnType<typeof setInterval> | null = null;
+  let renewalTimer: ReturnType<typeof setInterval> | null = null;
+
+  function reloadTlsContext(): boolean {
+    try {
+      clearConfigCache();
+      const freshTls = getTlsOptions(loadConfig({ reload: true }));
+      if (freshTls) {
+        (server as unknown as import('node:tls').Server).setSecureContext({
+          cert: freshTls.cert, key: freshTls.key, ca: freshTls.ca,
+        });
+        return true;
+      }
+    } catch (err) {
+      log.error(`TLS context reload failed: ${(err as Error).message}`);
+    }
+    return false;
+  }
+
+  // SIGHUP handler for manual TLS hot-reload
+  if (tlsOpts) {
+    process.on('SIGHUP', () => {
+      if (reloadTlsContext()) {
+        log.info('TLS context reloaded via SIGHUP');
+      }
+    });
+  }
 
   return {
     start() {
@@ -688,7 +726,31 @@ export function createICCServer(options: ICCServerOptions = {}): ICCServer {
           // Run stale message cleanup on startup and daily
           purgeStale(7);
           cleanupTimer = setInterval(() => purgeStale(7), CLEANUP_INTERVAL_MS);
-          cleanupTimer.unref(); // Don't keep process alive just for cleanup
+          cleanupTimer.unref();
+
+          // Auto-renewal: check cert on startup and daily
+          if (tlsOpts && config.server.tls?.certPath) {
+            const tlsDir = dirname(config.server.tls!.certPath!);
+            const checkAndRenew = async () => {
+              try {
+                const result = await renewIfNeeded({
+                  tlsDir,
+                  identity: config.identity,
+                  caEnrollUrl: buildCaEnrollUrl(config, tlsDir),
+                });
+                if (result.renewed) {
+                  if (reloadTlsContext()) {
+                    log.info(`TLS cert renewed (was ${result.daysRemaining}d from expiry)`);
+                  }
+                }
+              } catch (err) {
+                log.error(`TLS auto-renewal failed: ${(err as Error).message}`);
+              }
+            };
+            checkAndRenew();
+            renewalTimer = setInterval(checkAndRenew, CLEANUP_INTERVAL_MS);
+            renewalTimer.unref();
+          }
 
           resolve({ port: addr.port, host });
         });
@@ -698,6 +760,10 @@ export function createICCServer(options: ICCServerOptions = {}): ICCServer {
       if (cleanupTimer) {
         clearInterval(cleanupTimer);
         cleanupTimer = null;
+      }
+      if (renewalTimer) {
+        clearInterval(renewalTimer);
+        renewalTimer = null;
       }
       // End all SSE connections so server.close() can drain
       for (const res of sseConnections) {
