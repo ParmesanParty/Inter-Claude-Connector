@@ -16,7 +16,7 @@ icc invite <new-host-identity> --ip <new-host-ip>
 # Prints a join command with a one-time token (valid 15 minutes)
 ```
 
-**On the new host** (after steps 1-3 below):
+**On the new host** (after steps 1-4 below):
 
 ```bash
 icc join <ca-url> <join-token> --identity <your-identity> --ip <your-ip>
@@ -30,7 +30,7 @@ This automatically:
 - Pushes mesh updates to all existing peers
 
 After `icc join` completes, start the server and configure Claude Code
-(steps 5 and 7 below).
+(steps 6 and 8 below).
 
 ---
 
@@ -44,31 +44,51 @@ steps below.
 
 ## 1. Install Git and Node.js
 
-ICC requires Git (for pulling code) and Node.js 20+.
+ICC requires Git (for pulling code), Node.js 24, and C/C++ build tools
+(for the `better-sqlite3` native addon).
 
 ```bash
 # Debian/Ubuntu
-sudo apt-get update && sudo apt-get install -y git
+sudo apt-get update && sudo apt-get install -y git build-essential python3
 
-# Check if Node.js 20+ is already installed
+# Check if Node.js 24 is already installed
 which node && node --version
 ```
 
 If Node.js is missing or too old, install via NodeSource:
 
 ```bash
-curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
+curl -fsSL https://deb.nodesource.com/setup_24.x | sudo -E bash -
 sudo apt-get install -y nodejs
 ```
 
-Record the node path for step 5 (systemd needs the absolute path):
+Record the node path for step 6 (systemd needs the absolute path):
 
 ```bash
 which node
-# e.g. /usr/bin/node (system), ~/.nvm/versions/node/v22.x.x/bin/node (nvm)
+# e.g. /usr/bin/node (system), ~/.nvm/versions/node/v24.x.x/bin/node (nvm)
 ```
 
-## 2. Clone the Repository
+## 2. Install Claude Code
+
+Install the native build of Claude Code (recommended over npm):
+
+```bash
+curl -fsSL https://claude.ai/install.sh | bash
+```
+
+This installs to `~/.local/bin/claude` and auto-updates in the background.
+
+Verify:
+
+```bash
+claude --version
+```
+
+Then authenticate by running `claude` and following the browser prompts.
+A Pro, Max, Teams, Enterprise, or Console account is required.
+
+## 3. Clone the Repository
 
 ```bash
 mkdir -p ~/code
@@ -80,7 +100,7 @@ npm install
 
 All ICC hosts use `~/code/inter-claude-connector/` as the project path.
 
-## 3. npm link (for `icc` CLI command)
+## 4. npm link (for `icc` CLI command)
 
 ```bash
 cd ~/code/inter-claude-connector
@@ -90,12 +110,12 @@ sudo npm link
 Verify: `icc help`
 
 **Note:** If `sudo npm link` doesn't work (e.g. some system npm setups),
-use `node ~/code/inter-claude-connector/bin/icc.mjs` directly in hooks
+use `node ~/code/inter-claude-connector/bin/icc.ts` directly in hooks
 and service files.
 
-## 4. Initialize ICC Config
+## 5. Initialize ICC Config
 
-### 4a. Create your config
+### 5a. Create your config
 
 ```bash
 icc init --identity <your-identity>
@@ -105,7 +125,7 @@ This generates `~/.icc/config.json` with a `localToken` (for MCP/hooks).
 Choose an identity that's short and memorable (e.g. `laptop`, `server`,
 `desktop`).
 
-### 4b. Exchange per-peer auth tokens
+### 5b. Exchange per-peer auth tokens
 
 ICC uses per-peer auth tokens. Each host pair needs a bilateral token
 exchange — you generate a token for them, they generate one for you.
@@ -130,7 +150,7 @@ icc config --set remotes.<peer-identity>.token=<token-from-peer>
 
 Repeat for every peer you want to connect to.
 
-### 4c. Configure remotes
+### 5c. Configure remotes
 
 Add each peer to your config:
 
@@ -148,7 +168,7 @@ icc config --set security.execEnabled=true
 **Important:** Do NOT include yourself in `remotes` — only list other
 peers.
 
-## 5. Create systemd User Service
+## 6. Create systemd User Service
 
 ```bash
 mkdir -p ~/.config/systemd/user
@@ -164,7 +184,7 @@ After=network.target
 
 [Service]
 Type=simple
-ExecStart=/usr/bin/node /home/<your-user>/code/inter-claude-connector/bin/icc.mjs serve
+ExecStart=/usr/bin/node /home/<your-user>/code/inter-claude-connector/bin/icc.ts serve
 Restart=on-failure
 WorkingDirectory=/home/<your-user>/code/inter-claude-connector
 
@@ -188,7 +208,7 @@ journalctl --user -u icc-server -n 5 --no-pager
 # Should see: "ICC server listening on HTTP 0.0.0.0:3179"
 ```
 
-## 6. TLS Certificate Enrollment
+## 7. TLS Certificate Enrollment
 
 ICC uses mTLS (mutual TLS) for all peer-to-peer HTTP communication.
 Certificates are provisioned via an HTTP-01 style enrollment protocol.
@@ -205,7 +225,7 @@ One host in the mesh acts as the Certificate Authority (CA).
 
 ### On your host
 
-Your ICC server must be running (step 5) before enrollment — the CA
+Your ICC server must be running (step 6) before enrollment — the CA
 will connect to it to verify the challenge.
 
 ```bash
@@ -299,115 +319,25 @@ The CA operator must do two things before you can enroll:
   is intentionally plain HTTP — it's only used for initial cert
   provisioning, and the enrolling peer doesn't have a cert yet.
 
-## 7. Configure Claude Code
+## 8. Configure Claude Code
 
-Three things to set up for Claude Code integration.
+Three files need to be set up: MCP server config (`~/.claude.json`),
+lifecycle hooks (`~/.claude/settings.json`), and watcher instructions
+(`~/.claude/CLAUDE.md`).
 
-### 7a. MCP Server
+The easiest way is to let Claude Code configure itself. Open a Claude
+Code session in `~/code/inter-claude-connector` and prompt:
 
-The MCP server config goes in `~/.claude.json` under the top-level
-`mcpServers` key. Add the following (adjust the node path if needed):
+> Read docs/claude-code-setup.md and configure ICC integration on this
+> host.
 
-```json
-{
-  "mcpServers": {
-    "icc": {
-      "type": "stdio",
-      "command": "/usr/bin/node",
-      "args": ["/home/<your-user>/code/inter-claude-connector/bin/icc-mcp.mjs"],
-      "env": {}
-    }
-  }
-}
-```
+Claude Code will read the reference file, resolve local paths (node
+binary, home directory), and write all three config files.
 
-**Gotcha:** The MCP config file is `~/.claude.json`, NOT
-`~/.claude/.mcp.json` or `~/.claude/settings.json`.
+See [`docs/claude-code-setup.md`](claude-code-setup.md) for the full
+configuration reference if you prefer to set up manually.
 
-Verify after setup with `/mcp` inside a Claude Code session.
-
-### 7b. Lifecycle Hooks
-
-Hooks go in `~/.claude/settings.json` under the `hooks` key. If `npm
-link` wasn't used, replace `icc` with
-`node ~/code/inter-claude-connector/bin/icc.mjs` in all commands.
-
-```json
-{
-  "hooks": {
-    "SessionStart": [
-      { "matcher": "startup", "hooks": [{ "type": "command", "command": "icc hook startup 2>/dev/null || true" }] },
-      { "matcher": "resume", "hooks": [{ "type": "command", "command": "icc hook startup 2>/dev/null || true" }] },
-      { "matcher": "clear", "hooks": [{ "type": "command", "command": "icc hook startup 2>/dev/null || true" }] },
-      { "matcher": "compact", "hooks": [{ "type": "command", "command": "icc hook check 2>/dev/null || true" }] }
-    ],
-    "UserPromptSubmit": [
-      { "matcher": "", "hooks": [{ "type": "command", "command": "icc hook check 2>/dev/null || true" }] }
-    ],
-    "PostToolUse": [
-      { "matcher": "", "hooks": [{ "type": "command", "command": "icc hook check 2>/dev/null || true" }] }
-    ],
-    "Stop": [
-      { "matcher": "", "hooks": [{ "type": "command", "command": "icc hook shutdown" }] }
-    ],
-    "SessionEnd": [
-      { "matcher": "", "hooks": [{ "type": "command", "command": "icc hook session-end 2>/dev/null || true" }] }
-    ],
-    "SubagentStart": [
-      { "matcher": "", "hooks": [{ "type": "command", "command": "icc hook subagent-context 2>/dev/null || true" }] }
-    ],
-    "PreToolUse": [
-      { "matcher": "Bash", "hooks": [{ "type": "command", "command": "icc hook pre-bash 2>/dev/null || true" }] },
-      { "matcher": "mcp__icc__send_message|respond_to_message", "hooks": [{ "type": "command", "command": "icc hook pre-icc-message 2>/dev/null || true" }] }
-    ]
-  }
-}
-```
-
-### 7c. CLAUDE.md (Watcher Instructions)
-
-Create `~/.claude/CLAUDE.md` with instructions that tell Claude Code how
-to handle the ICC mail watcher. Without this, the model won't launch or
-re-launch the watcher.
-
-```markdown
-# ICC Inbox
-
-When a hook surfaces an unread message notification (e.g. "You have N
-unread messages"), you **must**:
-1. Call `check_messages` (MCP tool) to read them
-2. Briefly acknowledge the messages to the user
-3. Use `respond_to_message` if a reply is warranted
-4. Follow message conventions: prefix with `[TOPIC: x]`, and set the `status`
-   parameter on `send_message`/`respond_to_message` (preferred) or suffix with
-   `[STATUS: WAITING_FOR_REPLY|FYI_ONLY|ACTION_NEEDED|RESOLVED]` in body text
-
-# ICC Mail Watcher
-
-**Subagents (spawned via the Agent tool) must NOT launch or manage mail
-watchers.** Only the root conversation handles the watcher lifecycle.
-Subagents should ignore "[ICC] Start mail watcher" and "[ICC] Watcher
-not running" messages.
-
-On session start (when you see "[ICC] Start mail watcher"), silently
-launch a background watcher:
-- Command: `icc hook watch`
-- Use: Bash tool with `run_in_background: true`
-
-When the background task completes, read its output and silently
-re-launch after handling:
-- If output contains `[ICC] Mail received`: call `check_messages` MCP
-  tool, then re-launch
-- If output contains `[ICC] Watcher cycled`: just re-launch
-Do not announce or comment on watcher restarts to the user.
-
-Safety net: When you see `[ICC] Watcher not running` in any hook output,
-immediately re-launch the background watcher (same as above).
-
-If a watcher launch returns `[ICC] Watcher already active`, do nothing.
-```
-
-## 8. Coordinate with Existing Peers
+## 9. Coordinate with Existing Peers
 
 **If you used `icc join`:** This step is automatic — the CA pushes
 mesh updates to all existing peers with bidirectional auth tokens.
@@ -417,7 +347,7 @@ added to their `remotes`. Send each peer operator:
 
 - Your identity name
 - Your IP address or hostname
-- The outbound token you generated for them (from step 4b)
+- The outbound token you generated for them (from step 5b)
 
 They will run on their end:
 
@@ -427,7 +357,7 @@ icc config --set remotes.<your-identity>.token=<token-you-gave-them>
 systemctl --user restart icc-server
 ```
 
-## 9. Verify
+## 10. Verify
 
 ```bash
 # Check ICC status
@@ -440,7 +370,7 @@ icc status --peer <peer-identity>
 icc send --peer <peer-identity> "Reply with: hello"
 ```
 
-## 10. Updating ICC
+## 11. Updating ICC
 
 When new code is available, pull and restart:
 
@@ -459,8 +389,9 @@ after pulling. No need to re-link.
 | What | Where | Notes |
 |------|-------|-------|
 | ICC config | `~/.icc/config.json` | Identity, remotes, auth tokens, TLS |
-| ICC server data | `~/.icc/` | messages.jsonl, inbox/, signal files |
+| ICC server data | `~/.icc/` | inbox.db, signal files |
 | TLS certificates | `~/.icc/tls/` | ca.crt, server.crt, server.key |
+| Claude Code binary | `~/.local/bin/claude` | Native install, auto-updates |
 | MCP server config | `~/.claude.json` → `mcpServers` | **NOT** `.mcp.json` |
 | Lifecycle hooks | `~/.claude/settings.json` → `hooks` | |
 | Watcher instructions | `~/.claude/CLAUDE.md` | Global instructions for Claude Code |

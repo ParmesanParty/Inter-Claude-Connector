@@ -186,7 +186,7 @@ npm test
 # Runs: node --test test/*.test.ts
 ```
 
-15 test files covering auth, config, transport, protocol, inbox,
+20 test files covering auth, config, transport, protocol, inbox,
 TLS enrollment, MCP handlers, and full integration tests.
 
 ## Project Structure
@@ -204,7 +204,8 @@ src/
   transport/
     index.ts          TransportManager
     http.ts           HTTPS/mTLS transport
-  inbox.ts            Persistent inbox with threading
+  inbox.ts            Inbox API (push, read, delete, signal files)
+  inbox-db.ts         SQLite storage for inbox messages
   protocol.ts         Message schema and validation
   config.ts           Config loader with deep merge
   tls.ts              Certificate operations
@@ -218,12 +219,13 @@ config/
 docs/
   new-host-deployment.md   Full deployment guide
 test/
-  *.test.ts           15 test files
+  *.test.ts           20 test files
 ```
 
 ## Dependencies
 
 - [`@modelcontextprotocol/sdk`](https://github.com/modelcontextprotocol/typescript-sdk) — MCP server implementation
+- [`better-sqlite3`](https://github.com/WiseLibs/better-sqlite3) — Inbox message storage (native addon, requires build tools)
 - [`node-notifier`](https://github.com/mikaelbr/node-notifier) — Desktop notifications
 - [`zod`](https://github.com/colinhacks/zod) — API schema validation
 
