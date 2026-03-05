@@ -288,6 +288,13 @@ async function init() {
 
   // Set identity if provided
   if (flags.identity) {
+    const remoteCount = config.remotes ? Object.keys(config.remotes).length : 0;
+    if (config.identity && config.identity !== flags.identity && remoteCount > 0 && !flags.force) {
+      console.error(`Identity is currently "${config.identity}" with ${remoteCount} configured peer(s).`);
+      console.error('Changing identity will break mTLS CN verification with existing peers.');
+      console.error('Use --force to proceed anyway.');
+      process.exit(1);
+    }
     config.identity = flags.identity;
     console.log('Identity set to:', flags.identity);
   }
@@ -849,7 +856,25 @@ async function tls() {
   switch (subcommand) {
     case 'init': {
       const { initCA } = await import('../src/tls.ts');
+      const config = loadConfig();
       const tlsDir = (flags.dir as string) || join(homedir(), '.icc', 'tls');
+
+      // Guard: existing CA files
+      if ((existsSync(join(tlsDir, 'ca.key')) || existsSync(join(tlsDir, 'ca.crt'))) && !flags.force) {
+        console.error('CA already initialized. Re-running destroys the existing CA key');
+        console.error('and invalidates all certificates signed by it.');
+        console.error('Use --force to proceed anyway.');
+        process.exit(1);
+      }
+
+      // Guard: this host is enrolled as a client of a remote CA
+      if (config.tls?.ca && !flags.force) {
+        console.error(`This host is enrolled as a client of CA "${config.tls.ca}".`);
+        console.error('Running tls init creates a separate, independent CA.');
+        console.error('Use --force if this is intentional.');
+        process.exit(1);
+      }
+
       initCA(tlsDir);
       console.log(`CA initialized at ${tlsDir}`);
       console.log('Files: ca.key (private), ca.crt (distribute to peers)');
@@ -884,6 +909,14 @@ async function tls() {
       const config = loadConfig();
       const tlsDir = (flags.dir as string) || join(homedir(), '.icc', 'tls');
       const identity = config.identity;
+
+      // Guard: existing server key/cert
+      if ((existsSync(join(tlsDir, 'server.key')) || existsSync(join(tlsDir, 'server.crt'))) && !flags.force) {
+        console.error('Server key/certificate already exist. Re-enrolling generates a new key');
+        console.error('and the old private key will be lost.');
+        console.error('Use --force to proceed anyway.');
+        process.exit(1);
+      }
 
       const caIdentity = (flags.ca as string) || config.tls?.ca;
       if (!caIdentity) {
@@ -967,6 +1000,14 @@ async function tls() {
       if (!existsSync(caKeyPath)) {
         console.error('This command is only available on the CA host.');
         console.error('Use "icc tls enroll --ca <peer>" to enroll with a remote CA.');
+        process.exit(1);
+      }
+
+      // Guard: existing server key
+      if (existsSync(join(tlsDir, 'server.key')) && !flags.force) {
+        console.error('Server key already exists. Re-enrolling generates a new private key');
+        console.error('and the old one will be lost.');
+        console.error('Use --force to proceed anyway.');
         process.exit(1);
       }
 
@@ -1098,6 +1139,20 @@ async function invite(): Promise<void> {
   clearConfigCache();
   const config = loadConfig();
 
+  // Guard: self-invite
+  if (identity === config.identity) {
+    console.error(`Cannot invite yourself ("${identity}" is this host's identity).`);
+    process.exit(1);
+  }
+
+  // Guard: existing peer
+  if (config.remotes?.[identity] && !flags.force) {
+    console.error(`Peer "${identity}" already exists in remotes.`);
+    console.error('Re-inviting regenerates the peer token, breaking the existing connection.');
+    console.error('Use --force to proceed anyway.');
+    process.exit(1);
+  }
+
   // 1. Add remote with http:// URL (will be upgraded to https after enrollment)
   if (!config.remotes) config.remotes = {};
   config.remotes[identity] = { httpUrl: `http://${ip}:${peerPort}` };
@@ -1151,6 +1206,25 @@ async function joinMesh(): Promise<void> {
 
   if (!joinToken || !caIdentity) {
     console.error('Usage: icc join --ca <ca-identity> --token <join-token>');
+    process.exit(1);
+  }
+
+  // Guard: self-join
+  if (caIdentity === identity && !flags.force) {
+    console.error(`CA identity "${caIdentity}" matches this host's identity.`);
+    console.error('You appear to be joining yourself. Use --force if intentional.');
+    process.exit(1);
+  }
+
+  // Guard: existing mesh configuration
+  const hasRemotes = config.remotes && Object.keys(config.remotes).length > 0;
+  const hasTls = config.server?.tls?.enabled;
+  if ((hasRemotes || hasTls) && !flags.force) {
+    console.error('This host already has mesh configuration:');
+    if (hasRemotes) console.error(`  Remotes: ${Object.keys(config.remotes!).join(', ')}`);
+    if (hasTls) console.error('  TLS: enabled');
+    console.error('Join will overwrite remotes, peer tokens, and TLS config.');
+    console.error('Use --force to proceed anyway.');
     process.exit(1);
   }
 

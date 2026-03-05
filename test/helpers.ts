@@ -214,6 +214,33 @@ export function runHook(subcmd: string, env: Record<string, string> = {}, extraA
 }
 
 /**
+ * Run an `icc` CLI command as a subprocess with isolated env.
+ * Returns stdout, stderr, and exitCode (captures exit 1 instead of throwing).
+ */
+export function runCLI(args: string[], env: Record<string, string> = {}):
+    { stdout: string; stderr: string; exitCode: number } {
+  try {
+    const stdout = execFileSync('node', [iccBin, ...args], {
+      env: {
+        ...process.env,
+        HOME: env.HOME || process.env.HOME,
+        ICC_IDENTITY: env.ICC_IDENTITY || 'test-host',
+        ICC_REMOTE_SSH: '',
+        ICC_REMOTE_HTTP: '',
+        ...env,
+      },
+      timeout: 10000,
+      encoding: 'utf-8',
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+    return { stdout, stderr: '', exitCode: 0 };
+  } catch (err: unknown) {
+    const e = err as { stdout?: string; stderr?: string; status?: number };
+    return { stdout: e.stdout || '', stderr: e.stderr || '', exitCode: e.status ?? 1 };
+  }
+}
+
+/**
  * Create a temporary HOME directory with ~/.icc/ for hook tests.
  * Returns tmpHome path and a cleanup function.
  */
