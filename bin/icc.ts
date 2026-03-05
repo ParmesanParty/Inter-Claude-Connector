@@ -971,6 +971,32 @@ async function tls() {
       break;
     }
 
+    case 'enroll-self': {
+      const { generateKeyAndCSR, signCSR } = await import('../src/tls.ts');
+      const { loadConfig } = await import('../src/config.ts');
+      const config = loadConfig();
+      const tlsDir = (flags.dir as string) || join(homedir(), '.icc', 'tls');
+      const identity = config.identity;
+
+      // Guard: ca.key must exist (only CA host has it)
+      const caKeyPath = join(tlsDir, 'ca.key');
+      if (!existsSync(caKeyPath)) {
+        console.error('This command is only available on the CA host.');
+        console.error('Use "icc tls enroll --ca <peer>" to enroll with a remote CA.');
+        process.exit(1);
+      }
+
+      console.log(`Generating self-signed server certificate for "${identity}"...`);
+      const csr = generateKeyAndCSR(tlsDir, identity);
+      const cert = signCSR(tlsDir, csr, identity);
+      writeFileSync(join(tlsDir, 'server.crt'), cert);
+      console.log('Enrollment complete!');
+      console.log(`  cert:    ${join(tlsDir, 'server.crt')}`);
+      console.log(`  ca:      ${join(tlsDir, 'ca.crt')}`);
+      console.log(`  key:     ${join(tlsDir, 'server.key')}`);
+      break;
+    }
+
     case 'status': {
       const { getCertInfo } = await import('../src/tls.ts');
       const tlsDir = (flags.dir as string) || join(homedir(), '.icc', 'tls');
@@ -994,7 +1020,7 @@ async function tls() {
 
     default:
       console.error(`Unknown tls subcommand: ${subcommand || '(none)'}`);
-      console.error('Usage: icc tls <init|serve|enroll|status>');
+      console.error('Usage: icc tls <init|serve|enroll|enroll-self|status>');
       process.exit(1);
   }
 }
@@ -1177,7 +1203,7 @@ Commands:
   config [--set key=value]                 Show or edit configuration
   hook <startup|check|shutdown|watch>      Lifecycle hooks for Claude Code sessions
   instance <resolve [dir]|list>            Manage persistent instance names
-  tls <init|serve|enroll|status>         TLS certificate management
+  tls <init|serve|enroll|enroll-self|status>  TLS certificate management
   help                                      Show this help
 
 Options:
@@ -1196,6 +1222,7 @@ Examples:
   icc tls init                             # generate CA (CA host only)
   icc tls serve                            # start enrollment server on :4179
   icc tls enroll --ca desktop               # enroll with CA via HTTP-01
+  icc tls enroll-self                      # CA host: generate own server cert
   icc tls status                           # show cert info
 `.trim());
 }

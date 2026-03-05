@@ -4,6 +4,9 @@ Step-by-step guide for joining the ICC mesh as a new peer. All commands
 are run locally on the new host — ICC's philosophy is that each host
 controls itself.
 
+If you're bootstrapping the very first host (the CA), see
+[`ca-host-setup.md`](ca-host-setup.md) instead.
+
 Two paths are available:
 
 - **Path A: Quick onboarding** — uses `icc invite` (on CA) + `icc join`
@@ -429,6 +432,7 @@ CA-only (run on the CA host):
 
 ```bash
 icc tls init               # Initialize CA (one-time)
+icc tls enroll-self        # Generate CA host's own server cert
 icc tls serve              # Start enrollment server (runs as systemd)
 ```
 
