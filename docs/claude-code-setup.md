@@ -223,6 +223,16 @@ Safety net: When you see `[ICC] Watcher not running` in any hook output,
 immediately re-launch the background watcher (same as above).
 
 If a watcher launch returns `[ICC] Watcher already active`, do nothing.
+
+Known limitation: `/clear` kills the watcher — the model loses the background
+task ID and can't receive the completion notification. Recovery is automatic:
+`SessionStart clear` hook re-fires startup, and `icc hook check` safety net
+triggers on the next prompt.
+
+Cognitive pitfall: In idle sessions, watcher cycle-completion notifications can
+stack up in context without timestamps, creating an illusion of rapid cycling.
+Each cycle actually runs its full ~591s. Don't investigate "rapid cycling"
+unless wall-clock timing confirms sub-second completion.
 ```
 
 ## Verification
