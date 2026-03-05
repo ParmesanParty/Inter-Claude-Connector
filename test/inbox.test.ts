@@ -1646,3 +1646,31 @@ describe('MCP tool: respondToMessage with status', () => {
     assert.equal(captured.status, 'RESOLVED');
   });
 });
+
+// --- JSONL to SQLite migration ---
+
+describe('Inbox: JSONL to SQLite migration', () => {
+  it('migrates existing inbox.jsonl on init', () => {
+    reset(env.dir);
+    const jsonlPath = join(env.dir, 'inbox.jsonl');
+    const msgs = [
+      { id: 'legacy-1', from: 'old-sender', to: 'old-receiver', timestamp: '2026-01-01T00:00:00Z', body: 'legacy msg', replyTo: null, threadId: null, status: null, _meta: null, read: false },
+      { id: 'legacy-2', from: 'old-sender', to: 'old-receiver', timestamp: '2026-01-02T00:00:00Z', body: 'legacy msg 2', replyTo: null, threadId: 'thread-1', status: 'FYI_ONLY', _meta: null, read: true },
+    ];
+    writeFileSync(jsonlPath, msgs.map(m => JSON.stringify(m)).join('\n') + '\n');
+    init();
+    const all = getAll();
+    assert.equal(all.length, 2);
+    assert.equal(all[0]!.id, 'legacy-1');
+    assert.equal(all[1]!.read, true);
+    assert.ok(!existsSync(jsonlPath));
+    assert.ok(existsSync(jsonlPath + '.migrated'));
+  });
+
+  it('does not re-migrate if only .migrated exists', () => {
+    reset(env.dir);
+    writeFileSync(join(env.dir, 'inbox.jsonl.migrated'), '{"id":"x"}\n');
+    init();
+    assert.equal(getAll().length, 0);
+  });
+});
