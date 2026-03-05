@@ -1,6 +1,6 @@
 import { describe, it, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, existsSync, rmSync } from 'node:fs';
+import { mkdtempSync, existsSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
@@ -18,6 +18,7 @@ import {
   dbGetReadOlderThan,
   dbGetUnreadOlderThan,
   dbGetReceiptsOlderThan,
+  migrateFromJsonl,
 } from '../src/inbox-db.ts';
 import type { InboxMessage } from '../src/types.ts';
 
@@ -250,5 +251,65 @@ describe('inbox-db', () => {
     const result = dbGetReceiptsOlderThan(cutoff);
     assert.equal(result.length, 1);
     assert.equal(result[0]!.id, 'old-receipt');
+  });
+});
+
+describe('inbox-db: JSONL migration', () => {
+  let dir: string;
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'icc-inbox-db-migrate-'));
+    openInboxDb(dir);
+  });
+
+  afterEach(() => {
+    closeInboxDb();
+    try { rmSync(dir, { recursive: true, force: true }); } catch {}
+  });
+
+  it('imports messages from inbox.jsonl', () => {
+    const jsonlPath = join(dir, 'inbox.jsonl');
+    const msg1 = { id: 'migrate-1', from: 'alice', to: 'bob', timestamp: '2025-01-01T00:00:00Z', body: 'hello', read: false, threadId: 'thread-1' };
+    const msg2 = { id: 'migrate-2', from: 'bob', to: 'alice', timestamp: '2025-01-02T00:00:00Z', body: 'world', read: true, threadId: null };
+    writeFileSync(jsonlPath, JSON.stringify(msg1) + '\n' + JSON.stringify(msg2) + '\n');
+
+    const count = migrateFromJsonl(jsonlPath);
+    assert.equal(count, 2);
+
+    const all = dbGetAll();
+    assert.equal(all.length, 2);
+    assert.equal(all[0]!.id, 'migrate-1');
+    assert.equal(all[0]!.read, false);
+    assert.equal(all[0]!.threadId, 'thread-1');
+    assert.equal(all[1]!.id, 'migrate-2');
+    assert.equal(all[1]!.read, true);
+  });
+
+  it('skips malformed JSONL lines gracefully', () => {
+    const jsonlPath = join(dir, 'inbox.jsonl');
+    const good = { id: 'good-1', from: 'alice', to: 'bob', timestamp: '2025-01-01T00:00:00Z', body: 'ok' };
+    writeFileSync(jsonlPath, JSON.stringify(good) + '\n' + 'NOT VALID JSON\n');
+
+    const count = migrateFromJsonl(jsonlPath);
+    assert.equal(count, 1);
+
+    const all = dbGetAll();
+    assert.equal(all.length, 1);
+    assert.equal(all[0]!.id, 'good-1');
+  });
+
+  it('renames source file to .migrated', () => {
+    const jsonlPath = join(dir, 'inbox.jsonl');
+    writeFileSync(jsonlPath, JSON.stringify({ id: 'r1', from: 'a', body: 'b' }) + '\n');
+
+    migrateFromJsonl(jsonlPath);
+
+    assert.equal(existsSync(jsonlPath), false);
+    assert.equal(existsSync(jsonlPath + '.migrated'), true);
+  });
+
+  it('returns 0 when file does not exist', () => {
+    const count = migrateFromJsonl(join(dir, 'nonexistent.jsonl'));
+    assert.equal(count, 0);
   });
 });

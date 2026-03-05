@@ -1,7 +1,11 @@
 import Database from 'better-sqlite3';
 import type BetterSqlite3 from 'better-sqlite3';
 import { join } from 'node:path';
+import { readFileSync, renameSync } from 'node:fs';
+import { createLogger } from './util/logger.ts';
 import type { InboxMessage, InboxMessageStatus, MessageMeta } from './types.ts';
+
+const log = createLogger('inbox-db');
 
 // ── DB lifecycle ────────────────────────────────────────────────────
 
@@ -172,4 +176,66 @@ export function dbGetReceiptsOlderThan(cutoffMs: number): InboxMessage[] {
   const cutoffISO = new Date(cutoffMs).toISOString();
   const rows = d.prepare(`SELECT * FROM messages WHERE json_extract(meta_json, '$.type') = 'read-receipt' AND timestamp < ? ORDER BY timestamp ASC`).all(cutoffISO) as MessageRow[];
   return rows.map(rowToMessage);
+}
+
+// ── JSONL migration ──────────────────────────────────────────────────
+
+export function migrateFromJsonl(jsonlPath: string): number {
+  let content: string;
+  try {
+    content = readFileSync(jsonlPath, 'utf-8');
+  } catch {
+    return 0;
+  }
+
+  const lines = content.split('\n').filter(l => l.trim() !== '');
+  const messages: InboxMessage[] = [];
+
+  for (const line of lines) {
+    try {
+      const parsed = JSON.parse(line);
+      messages.push({
+        id: parsed.id,
+        from: parsed.from ?? '',
+        to: parsed.to ?? '',
+        timestamp: parsed.timestamp ?? new Date().toISOString(),
+        body: parsed.body ?? '',
+        replyTo: parsed.replyTo || null,
+        threadId: parsed.threadId ?? null,
+        status: parsed.status ?? null,
+        _meta: parsed._meta || null,
+        read: !!parsed.read,
+      });
+    } catch {
+      log.warn('Skipping malformed JSONL line: %s', line);
+    }
+  }
+
+  if (messages.length > 0) {
+    const d = getDb();
+    const stmt = d.prepare(`
+      INSERT INTO messages (id, from_addr, to_addr, timestamp, body, replyTo, threadId, status, meta_json, read)
+      VALUES (@id, @from_addr, @to_addr, @timestamp, @body, @replyTo, @threadId, @status, @meta_json, @read)
+    `);
+    const insertAll = d.transaction((msgs: InboxMessage[]) => {
+      for (const msg of msgs) {
+        stmt.run({
+          id: msg.id,
+          from_addr: msg.from,
+          to_addr: msg.to,
+          timestamp: msg.timestamp,
+          body: msg.body,
+          replyTo: msg.replyTo,
+          threadId: msg.threadId,
+          status: msg.status,
+          meta_json: msg._meta ? JSON.stringify(msg._meta) : null,
+          read: msg.read ? 1 : 0,
+        });
+      }
+    });
+    insertAll(messages);
+  }
+
+  renameSync(jsonlPath, `${jsonlPath}.migrated`);
+  return messages.length;
 }
