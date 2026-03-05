@@ -41,6 +41,10 @@ export function openInboxDb(dir: string): BetterSqlite3.Database {
   return db;
 }
 
+export function isDbOpen(): boolean {
+  return db !== null;
+}
+
 export function getDb(): BetterSqlite3.Database {
   if (!db) throw new Error('Inbox DB not open — call openInboxDb() first');
   return db;
@@ -147,6 +151,11 @@ export function dbMarkAllRead(): number {
   const d = getDb();
   const result = d.prepare('UPDATE messages SET read = 1 WHERE read = 0').run();
   return result.changes;
+}
+
+export function dbUpdateTimestamp(id: string, timestamp: string): void {
+  const d = getDb();
+  d.prepare('UPDATE messages SET timestamp = ? WHERE id = ?').run(timestamp, id);
 }
 
 export function dbRemove(ids: string[]): number {

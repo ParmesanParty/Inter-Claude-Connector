@@ -1,18 +1,22 @@
-import { appendFileSync, readFileSync, writeFileSync, mkdirSync, unlinkSync, readdirSync } from 'node:fs';
+import { appendFileSync, writeFileSync, mkdirSync, unlinkSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { randomUUID } from 'node:crypto';
 import { createLogger } from './util/logger.ts';
 import { parseAddress, addressMatches } from './address.ts';
 import type { InboxMessage, InboxMessageStatus, MessageMeta } from './types.ts';
+import {
+  openInboxDb, closeInboxDb, isDbOpen, migrateFromJsonl,
+  dbInsert, dbGetAll, dbGetUnread, dbGetById, dbGetByIds,
+  dbMarkRead, dbMarkAllRead, dbRemove, dbUpdateTimestamp,
+  dbGetReadOlderThan, dbGetUnreadOlderThan, dbGetReceiptsOlderThan,
+} from './inbox-db.ts';
 
 const log = createLogger('inbox');
 
 let inboxDir = process.env.ICC_INBOX_DIR || join(homedir(), '.icc');
-let inboxPath = join(inboxDir, 'inbox.jsonl');
 let signalPath = join(inboxDir, 'unread');
 
-const messages: InboxMessage[] = [];
 const subscribers = new Set<(message: InboxMessage) => void>();
 let notifyFn: ((message: InboxMessage) => void) | null = null;
 let receiptSenderFn: ((message: InboxMessage, readerAddress: string) => void) | null = null;
@@ -23,23 +27,13 @@ export function isReceipt(m: InboxMessage): boolean {
 
 export function init(): void {
   mkdirSync(inboxDir, { recursive: true });
-  try {
-    const raw = readFileSync(inboxPath, 'utf-8').trim();
-    if (!raw) return;
-    for (const line of raw.split('\n')) {
-      try {
-        const msg = JSON.parse(line);
-        msg.threadId = msg.threadId ?? null;
-        msg.status = msg.status ?? null;
-        messages.push(msg);
-      } catch {
-        // skip malformed lines
-      }
-    }
-    log.info(`Loaded ${messages.length} inbox messages from disk`);
-  } catch {
-    // No existing inbox file — that's fine
-  }
+  openInboxDb(inboxDir);
+  // One-time migration from JSONL
+  const jsonlPath = join(inboxDir, 'inbox.jsonl');
+  const migrated = migrateFromJsonl(jsonlPath);
+  if (migrated > 0) log.info(`Migrated ${migrated} messages from JSONL to SQLite`);
+  const total = dbGetAll().length;
+  if (total > 0) log.info(`Loaded ${total} inbox messages from database`);
   updateSignalFile();
 }
 
@@ -78,12 +72,15 @@ export function push(message: InboxPushInput, { silent = false }: PushOptions = 
     _meta: message._meta || null,
     read: false,
   };
-  messages.push(full);
-  try {
-    appendFileSync(inboxPath, JSON.stringify(full) + '\n');
-  } catch (err) {
-    log.error(`Failed to persist inbox message: ${(err as Error).message}`);
-  }
+  dbInsert(full);
+  // Make timestamp reactive so mutations sync back to DB (tests rely on this)
+  let _ts = full.timestamp;
+  Object.defineProperty(full, 'timestamp', {
+    get() { return _ts; },
+    set(v: string) { _ts = v; dbUpdateTimestamp(full.id, v); },
+    enumerable: true,
+    configurable: true,
+  });
   if (!silent) {
     updateSignalFile();
     if (notifyFn) {
@@ -109,37 +106,29 @@ interface GetOptions {
 }
 
 export function getUnread({ from, forAddress, serverIdentity }: GetOptions = {}): InboxMessage[] {
-  return messages.filter(m => {
-    if (m.read) return false;
-    if (from && m.from !== from) return false;
-    if (forAddress && serverIdentity) {
-      if (!addressMatches(m.to, forAddress, serverIdentity)) return false;
-    }
-    return true;
-  });
+  if (!isDbOpen()) return [];
+  const msgs = dbGetUnread(from ? { from } : {});
+  if (forAddress && serverIdentity) {
+    return msgs.filter(m => addressMatches(m.to, forAddress, serverIdentity));
+  }
+  return msgs;
 }
 
 export function getAll({ forAddress, serverIdentity }: GetOptions = {}): InboxMessage[] {
+  if (!isDbOpen()) return [];
+  const msgs = dbGetAll();
   if (forAddress && serverIdentity) {
-    return messages.filter(m => addressMatches(m.to, forAddress, serverIdentity));
+    return msgs.filter(m => addressMatches(m.to, forAddress, serverIdentity));
   }
-  return [...messages];
+  return msgs;
 }
 
 export function markRead(ids: string[], readerAddress?: string): number {
-  let count = 0;
-  const newlyRead: InboxMessage[] = [];
-  for (const m of messages) {
-    if (ids.includes(m.id) && !m.read) {
-      m.read = true;
-      count++;
-      newlyRead.push(m);
-    }
-  }
+  const beforeMsgs = dbGetByIds(ids).filter(m => !m.read);
+  const count = dbMarkRead(ids);
   if (count > 0) {
-    rewrite();
     updateSignalFile();
-    sendReceipts(newlyRead, readerAddress);
+    sendReceipts(beforeMsgs, readerAddress);
   }
   return count;
 }
@@ -151,20 +140,18 @@ interface MarkAllReadOptions {
 }
 
 export function markAllRead({ forAddress, serverIdentity, readerAddress }: MarkAllReadOptions = {}): number {
-  let count = 0;
-  const newlyRead: InboxMessage[] = [];
-  for (const m of messages) {
-    if (!m.read) {
-      if (forAddress && serverIdentity) {
-        if (!addressMatches(m.to, forAddress, serverIdentity)) continue;
-      }
-      m.read = true;
-      count++;
-      newlyRead.push(m);
-    }
+  let count: number;
+  let newlyRead: InboxMessage[];
+  if (forAddress && serverIdentity) {
+    const matching = getUnread({ forAddress, serverIdentity });
+    newlyRead = matching;
+    const ids = matching.map(m => m.id);
+    count = dbMarkRead(ids);
+  } else {
+    newlyRead = dbGetUnread();
+    count = dbMarkAllRead();
   }
   if (count > 0) {
-    rewrite();
     updateSignalFile();
     sendReceipts(newlyRead, readerAddress);
   }
@@ -172,19 +159,13 @@ export function markAllRead({ forAddress, serverIdentity, readerAddress }: MarkA
 }
 
 export function getById(id: string): InboxMessage | null {
-  return messages.find(m => m.id === id) || null;
+  if (!isDbOpen()) return null;
+  return dbGetById(id);
 }
 
 export function remove(ids: string[]): number {
-  let count = 0;
-  for (let i = messages.length - 1; i >= 0; i--) {
-    if (ids.includes(messages[i]!.id)) {
-      messages.splice(i, 1);
-      count++;
-    }
-  }
+  const count = dbRemove(ids);
   if (count > 0) {
-    rewrite();
     updateSignalFile();
   }
   return count;
@@ -195,22 +176,19 @@ export function purgeStale(maxAgeDays = 7): number {
   const staleCutoff = now - maxAgeDays * 24 * 60 * 60 * 1000;
   const archiveCutoff = now - 1 * 24 * 60 * 60 * 1000;
 
-  const toArchive = messages.filter(m =>
-    m.read && !isReceipt(m) && new Date(m.timestamp).getTime() < archiveCutoff
-  );
+  const toArchive = dbGetReadOlderThan(archiveCutoff).filter(m => !isReceipt(m));
   if (toArchive.length > 0) {
     appendToArchive(toArchive);
   }
 
   const removeIds = new Set<string>();
   for (const m of toArchive) removeIds.add(m.id);
-  for (const m of messages) {
-    if (!m.read && new Date(m.timestamp).getTime() < staleCutoff) removeIds.add(m.id);
-    if (isReceipt(m) && new Date(m.timestamp).getTime() < archiveCutoff) removeIds.add(m.id);
-  }
+  for (const m of dbGetUnreadOlderThan(staleCutoff)) removeIds.add(m.id);
+  for (const m of dbGetReceiptsOlderThan(archiveCutoff)) removeIds.add(m.id);
 
   if (removeIds.size === 0) return 0;
-  const count = remove([...removeIds]);
+  const count = dbRemove([...removeIds]);
+  if (count > 0) updateSignalFile();
   log.info(`Purged ${count} message(s): archived ${toArchive.length}, removed rest`);
   return count;
 }
@@ -230,7 +208,7 @@ export function subscribe(callback: (msg: InboxMessage) => void): () => void {
 }
 
 export function getInboxPath(): string {
-  return inboxPath;
+  return join(inboxDir, 'inbox.db');
 }
 
 export function getInboxDir(): string {
@@ -243,14 +221,13 @@ export function getSignalPath(instance?: string): string {
 }
 
 export function reset(newDir?: string): void {
-  messages.length = 0;
+  closeInboxDb();
   subscribers.clear();
   notifyFn = null;
   receiptSenderFn = null;
   if (newDir) {
     cleanupSignalFiles();
     inboxDir = newDir;
-    inboxPath = join(inboxDir, 'inbox.jsonl');
     signalPath = join(inboxDir, 'unread');
   }
 }
@@ -264,15 +241,6 @@ function sendReceipts(newlyReadMessages: InboxMessage[], readerAddress?: string)
     } catch (err) {
       log.error(`Failed to send read receipt for ${m.id}: ${(err as Error).message}`);
     }
-  }
-}
-
-function rewrite(): void {
-  try {
-    const data = messages.map(m => JSON.stringify(m)).join('\n') + (messages.length ? '\n' : '');
-    writeFileSync(inboxPath, data);
-  } catch (err) {
-    log.error(`Failed to rewrite inbox: ${(err as Error).message}`);
   }
 }
 
@@ -308,7 +276,9 @@ function writeSignalContent(path: string, unread: InboxMessage[]): void {
 }
 
 function updateSignalFile(): void {
-  const unread = messages.filter(m => !m.read && !isReceipt(m));
+  if (!isDbOpen()) return;
+  const allUnread = dbGetUnread();
+  const unread = allUnread.filter(m => !isReceipt(m));
 
   try {
     const instanceUnread = new Map<string, InboxMessage[]>();
