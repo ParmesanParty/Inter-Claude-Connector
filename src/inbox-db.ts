@@ -227,7 +227,7 @@ export function migrateFromJsonl(jsonlPath: string): number {
   if (messages.length > 0) {
     const d = getDb();
     const stmt = d.prepare(`
-      INSERT INTO messages (id, from_addr, to_addr, timestamp, body, replyTo, threadId, status, meta_json, read)
+      INSERT OR IGNORE INTO messages (id, from_addr, to_addr, timestamp, body, replyTo, threadId, status, meta_json, read)
       VALUES (@id, @from_addr, @to_addr, @timestamp, @body, @replyTo, @threadId, @status, @meta_json, @read)
     `);
     const insertAll = d.transaction((msgs: InboxMessage[]) => {

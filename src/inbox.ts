@@ -73,7 +73,9 @@ export function push(message: InboxPushInput, { silent = false }: PushOptions = 
     read: false,
   };
   dbInsert(full);
-  // Make timestamp reactive so mutations sync back to DB (tests rely on this)
+  // Reactive setter: syncs timestamp mutations back to DB.
+  // Only exists on objects returned by push(), NOT on objects from getAll()/getById().
+  // Needed because purgeStale tests backdate timestamps via direct assignment.
   let _ts = full.timestamp;
   Object.defineProperty(full, 'timestamp', {
     get() { return _ts; },
