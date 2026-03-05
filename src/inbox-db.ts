@@ -12,6 +12,10 @@ const log = createLogger('inbox-db');
 let db: BetterSqlite3.Database | null = null;
 
 export function openInboxDb(dir: string): BetterSqlite3.Database {
+  if (db) {
+    db.close();
+    db = null;
+  }
   const dbPath = join(dir, 'inbox.db');
   db = new Database(dbPath);
 
