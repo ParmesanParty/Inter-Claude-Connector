@@ -69,9 +69,9 @@ icc init --identity <your-hostname>
 
 This creates `~/.icc/config.json` with a local auth token. To join an
 existing mesh, the CA host runs `icc invite <identity>` and provides a
-join command. See [Deploying to a New Host](docs/new-host-deployment.md)
-for the full setup guide including manual peer configuration, TLS
-enrollment, systemd services, and Claude Code integration.
+join command. See [CA host setup](docs/ca-host-setup.md) for bootstrapping a new mesh,
+or [new host deployment](docs/new-host-deployment.md) for joining an
+existing one.
 
 ### Run
 
@@ -161,7 +161,9 @@ rendering.
 
 TLS certificates are provisioned via an HTTP-01 enrollment protocol,
 or automatically via `icc invite`/`icc join`.
-See [deployment docs](docs/new-host-deployment.md).
+See [CA host setup](docs/ca-host-setup.md) for bootstrapping the first
+host, or [new host deployment](docs/new-host-deployment.md) for joining
+an existing mesh.
 
 ## Configuration
 
@@ -217,7 +219,9 @@ src/
 config/
   default.json        Default configuration
 docs/
-  new-host-deployment.md   Full deployment guide
+  ca-host-setup.md         CA host bootstrap guide
+  new-host-deployment.md   New peer deployment guide
+  claude-code-setup.md     Claude Code self-setup reference
 test/
   *.test.ts           20 test files
 ```
