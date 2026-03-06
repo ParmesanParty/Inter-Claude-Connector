@@ -200,34 +200,28 @@ unread messages"), you **must**:
    parameter on `send_message`/`respond_to_message` (preferred) or suffix with
    `[STATUS: WAITING_FOR_REPLY|FYI_ONLY|ACTION_NEEDED|RESOLVED]` in body text
 
-# ICC Mail Watcher
+# ICC Activation & Mail Watcher
+
+On session start, the startup hook outputs status: "ICC: connected, N unread.
+Run /watch to activate." Do NOT auto-launch the watcher on startup. The user
+or model invokes `/watch` to activate.
 
 **Subagents (spawned via the Agent tool) must NOT launch or manage mail
 watchers.** Only the root conversation handles the watcher lifecycle.
-Subagents should ignore "[ICC] Start mail watcher" and "[ICC] Watcher
-not running" messages.
 
-On session start (when you see "[ICC] Start mail watcher"), silently
-launch a background watcher:
-- Command: `icc hook watch`
-- Use: Bash tool with `run_in_background: true`
-
-When the background task completes, read its output and silently
+When the background watcher task completes, read its output and silently
 re-launch after handling:
 - If output contains `[ICC] Mail received`: call `check_messages` MCP
   tool, then re-launch
 - If output contains `[ICC] Watcher cycled`: just re-launch
 Do not announce or comment on watcher restarts to the user.
 
-Safety net: When you see `[ICC] Watcher not running` in any hook output,
-immediately re-launch the background watcher (same as above).
-
-If a watcher launch returns `[ICC] Watcher already active`, do nothing.
+If a watcher launch is denied by a hook or returns `[ICC] Watcher already
+active`, do nothing — another watcher is already handling this instance.
 
 Known limitation: `/clear` kills the watcher — the model loses the background
 task ID and can't receive the completion notification. Recovery is automatic:
-`SessionStart clear` hook re-fires startup, and `icc hook check` safety net
-triggers on the next prompt.
+`SessionStart clear` hook re-fires startup. Run `/watch` again to reactivate.
 
 Cognitive pitfall: In idle sessions, watcher cycle-completion notifications can
 stack up in context without timestamps, creating an illusion of rapid cycling.
@@ -240,9 +234,9 @@ unless wall-clock timing confirms sub-second completion.
 After completing all three steps, restart Claude Code and verify:
 
 1. **MCP server:** Run `/mcp` inside a Claude Code session. The `icc`
-   server should appear with its 10 tools listed.
-2. **Hooks:** The session should display `[ICC] Start mail watcher` on
-   startup, confirming the SessionStart hook fired.
+   server should appear with its 8 tools listed.
+2. **Hooks:** The session should display "ICC: connected, N unread. Run
+   /watch to activate." on startup, confirming the SessionStart hook fired.
 3. **Connectivity:** Use the `ping_remote` MCP tool to ping a peer.
 
 ---

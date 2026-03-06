@@ -15,7 +15,7 @@ ICC lets Claude Code sessions on different machines talk to each other:
   across the mesh
 
 Communication happens over HTTPS with mutual TLS. Claude Code integrates via
-[MCP](https://modelcontextprotocol.io/) (10 tools) and lifecycle hooks.
+[MCP](https://modelcontextprotocol.io/) (8 tools) and lifecycle hooks.
 
 ## Architecture
 
@@ -108,13 +108,13 @@ icc hook     <subcommand>              Claude Code lifecycle hooks
 icc instance <subcommand>              Manage persistent instance names
 icc tls      <subcommand>              TLS certificate management
 icc invite   <identity> --ip <ip>     Generate join token for a new host (CA only)
-icc join     <ca-url> <token>         Join the mesh using an invite token
+icc join     --ca <id> --token <tok>  Join the mesh using an invite token
 icc help                               Show usage
 ```
 
 ## MCP Tools
 
-ICC exposes 10 tools to Claude Code via MCP:
+ICC exposes 8 tools to Claude Code via MCP:
 
 | Tool | Type | Description |
 |------|------|-------------|
@@ -214,6 +214,7 @@ src/
   mcp.ts              MCP tool definitions
   client.ts           High-level send wrapper
   peers.ts            PeerRouter (multi-peer routing)
+  registry.ts         Instance registry with session state machine
   transport/
     index.ts          TransportManager
     http.ts           HTTPS/mTLS transport
@@ -229,12 +230,16 @@ src/
     logger.ts         Logger (writes to stderr)
 config/
   default.json        Default configuration
+docker/
+  entrypoint.ts       Docker entrypoint with setup wizard
+  healthcheck.ts      Container health check
 docs/
   ca-host-setup.md         CA host bootstrap guide
   new-host-deployment.md   New peer deployment guide
   claude-code-setup.md     Claude Code self-setup reference
+  docker.md                Docker deployment guide
 test/
-  *.test.ts           20 test files
+  *.test.ts           21 test files
 ```
 
 ## Dependencies

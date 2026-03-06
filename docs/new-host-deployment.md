@@ -156,18 +156,21 @@ icc invite <new-host-identity> --ip <new-host-ip>
 
 ### A2. On the new host
 
-Run the `icc join` command from the output above:
+Run the `icc join` command printed by `icc invite`:
 
 ```bash
-icc join <ca-url> <join-token> --identity <your-identity> --ip <your-ip>
+icc join --ca <ca-identity> --token <join-token>
 ```
+
+The `--ip` flag is optional (defaults to `0.0.0.0`). Use `--url` if the CA's
+enrollment URL can't be derived from your config.
 
 This automatically:
 - Generates an Ed25519 keypair and CSR
 - Authenticates with the join token
 - Gets a CA-signed certificate
-- Configures TLS, peer tokens, and CA identity
-- Pushes mesh updates to all existing peers
+- Configures TLS, peer tokens, and remote entries for all mesh peers
+- The CA separately pushes mesh updates to existing peers via `icc invite`
 
 ### A3. Restart with TLS
 

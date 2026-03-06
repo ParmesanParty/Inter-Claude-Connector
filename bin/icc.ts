@@ -1407,9 +1407,11 @@ Commands:
   status                                    Check connectivity to all peers
   init [--identity I] [--peer P] [--force] Initialize config, tokens, per-peer auth
   config [--set key=value]                 Show or edit configuration
-  hook <startup|check|shutdown|watch>      Lifecycle hooks for Claude Code sessions
+  hook <subcommand>                        Lifecycle hooks for Claude Code sessions
   instance <resolve [dir]|list>            Manage persistent instance names
   tls <init|serve|enroll|enroll-self|renew|status>  TLS certificate management
+  invite <identity> --ip <ip> [--port N]  Generate join token for new host (CA only)
+  join --ca <id> --token <tok> [--url U]  Join mesh using an invite token
   help                                      Show this help
 
 Options:

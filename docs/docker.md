@@ -67,7 +67,7 @@ Add to `~/.claude/settings.json` under `"hooks"`:
       {
         "hooks": [{
           "type": "command",
-          "command": "ST=$(cat /tmp/icc-session-$PPID.json 2>/dev/null | grep -o '\"sessionToken\":\"[^\"]*\"' | cut -d'\"' -f4); [ -n \"$ST\" ] && curl -sf -X POST http://localhost:3179/api/hook/heartbeat -H 'Content-Type: application/json' -d \"{\\\"sessionToken\\\":\\\"$ST\\\"}\" || true"
+          "command": "ST=$(cat /tmp/icc-session-$PPID.token 2>/dev/null); [ -n \"$ST\" ] && curl -sf -X POST http://localhost:3179/api/hook/heartbeat -H 'Content-Type: application/json' -d \"{\\\"sessionToken\\\":\\\"$ST\\\"}\" || true"
         }]
       }
     ],
@@ -91,7 +91,7 @@ Add to `~/.claude/settings.json` under `"hooks"`:
       {
         "hooks": [{
           "type": "command",
-          "command": "ST=$(cat /tmp/icc-session-$PPID.json 2>/dev/null | grep -o '\"sessionToken\":\"[^\"]*\"' | cut -d'\"' -f4); [ -n \"$ST\" ] && curl -sf -X POST http://localhost:3179/api/hook/session-end -H 'Content-Type: application/json' -d \"{\\\"sessionToken\\\":\\\"$ST\\\"}\" || true; rm -f /tmp/icc-session-$PPID.json"
+          "command": "ST=$(cat /tmp/icc-session-$PPID.token 2>/dev/null); [ -n \"$ST\" ] && curl -sf -X POST http://localhost:3179/api/hook/session-end -H 'Content-Type: application/json' -d \"{\\\"sessionToken\\\":\\\"$ST\\\"}\" || true; rm -f /tmp/icc-session-$PPID.token"
         }]
       }
     ]
@@ -99,17 +99,30 @@ Add to `~/.claude/settings.json` under `"hooks"`:
 }
 ```
 
-Replace `PROJECT` with your project's instance name.
+Replace `PROJECT` with your project's instance name (e.g. the basename of your working directory).
 
 ### Mail Watcher (Docker)
 
-Use the `/watch` skill to activate ICC engagement, which launches a watcher via:
+ICC uses a `/watch` activation model. The startup hook only reports status — activation
+happens when the model runs `/watch`, which:
 
-```bash
-curl --max-time 591 -s "http://localhost:3179/api/watch?instance=PROJECT&sessionToken=TOKEN"
-```
+1. **Registers** with the server via `POST /api/hook/watch`:
+   ```bash
+   curl -sf -X POST http://localhost:3179/api/hook/watch \
+     -H 'Content-Type: application/json' \
+     -d '{"instance":"PROJECT","pid":0}'
+   ```
+   The response contains `{ "status": "active", "sessionToken": "..." }`.
+   Save the token: `echo "$TOKEN" > /tmp/icc-session-$PPID.token`
 
-The watcher blocks until a message arrives or times out, then the model relaunches it.
+2. **Launches the watcher** via the long-poll endpoint:
+   ```bash
+   curl --max-time 591 -sf "http://localhost:3179/api/watch?instance=PROJECT&sessionToken=TOKEN"
+   ```
+   This blocks until a message arrives (`{"event":"mail"}`) or times out
+   (`{"event":"timeout"}`), then the model relaunches it.
+
+The `/watch` skill handles this flow automatically — see `~/.claude/skills/watch/SKILL.md`.
 
 ## Environment Variables
 
