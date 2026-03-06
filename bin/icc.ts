@@ -516,6 +516,74 @@ function deleteSessionInstance(): void {
   } catch { /* non-fatal */ }
 }
 
+// ── Session token helpers ──────────────────────────────────────
+// The session token is issued by the server on registration (POST /api/hook/watch)
+// and used for heartbeats, snooze, wake, and session-end.
+
+function sessionTokenPath(ccPid: number): string {
+  return join(homedir(), '.icc', `session.${ccPid}.token`);
+}
+
+function writeSessionToken(token: string): void {
+  try {
+    writeFileSync(sessionTokenPath(getClaudeCodePid()), token, { mode: 0o600 });
+  } catch { /* non-fatal */ }
+}
+
+function getSessionToken(): string | null {
+  try {
+    const path = sessionTokenPath(getClaudeCodePid());
+    if (existsSync(path)) return readFileSync(path, 'utf-8').trim();
+  } catch { /* fall through */ }
+  return null;
+}
+
+function deleteSessionToken(): void {
+  try { unlinkSync(sessionTokenPath(getClaudeCodePid())); } catch { /* non-fatal */ }
+}
+
+/**
+ * Make an HTTP(S) request to the local ICC server hook endpoint.
+ * Returns parsed JSON response, or null on error/timeout.
+ */
+async function hookRequest(path: string, body: Record<string, unknown>): Promise<any> {
+  const { loadConfig, getTlsOptions, createIdentityVerifier } = await import('../src/config.ts');
+  const config = loadConfig();
+  const port = config.server.port;
+  const authToken = config.server.localToken;
+  const tlsOpts = getTlsOptions(config);
+  const requestFn = tlsOpts
+    ? (await import('node:https')).request
+    : request;
+  const payload = JSON.stringify(body);
+
+  return new Promise<any>((resolve) => {
+    const req = requestFn({
+      hostname: '127.0.0.1',
+      port,
+      path,
+      method: 'POST',
+      timeout: 2000,
+      ...(tlsOpts ? { ...tlsOpts, checkServerIdentity: createIdentityVerifier(config.identity) } : {}),
+      headers: {
+        'Content-Type': 'application/json',
+        'Content-Length': Buffer.byteLength(payload),
+        ...(authToken && { 'Authorization': `Bearer ${authToken}` }),
+      },
+    }, (res: any) => {
+      let data = '';
+      res.on('data', (chunk: string) => { data += chunk; });
+      res.on('end', () => {
+        try { resolve(JSON.parse(data)); } catch { resolve(null); }
+      });
+    });
+    req.on('error', () => resolve(null));
+    req.on('timeout', () => { req.destroy(); resolve(null); });
+    req.write(payload);
+    req.end();
+  });
+}
+
 async function hook() {
   const subcommand = positional[0];
   const { resolve: resolveInstance } = await import('../src/instances.ts');
@@ -526,8 +594,6 @@ async function hook() {
     ? cwdInstanceName
     : getSessionInstanceName(cwdInstanceName);
   const config = loadConfig();
-  const port = config.server.port;
-  const authToken = config.server.localToken;
 
   switch (subcommand) {
     case 'startup': {
@@ -535,8 +601,12 @@ async function hook() {
       const iccDir = join(homedir(), '.icc');
       try {
         for (const f of readdirSync(iccDir)) {
-          if (!f.startsWith('session.') || !f.endsWith('.instance')) continue;
-          const pid = parseInt(f.slice('session.'.length, -'.instance'.length), 10);
+          // Clean stale .instance and .token files
+          const isInstance = f.startsWith('session.') && f.endsWith('.instance');
+          const isToken = f.startsWith('session.') && f.endsWith('.token');
+          if (!isInstance && !isToken) continue;
+          const suffix = isInstance ? '.instance' : '.token';
+          const pid = parseInt(f.slice('session.'.length, -suffix.length), 10);
           if (isNaN(pid)) continue;
           try { process.kill(pid, 0); } catch {
             try { unlinkSync(join(iccDir, f)); } catch { /* ignore */ }
@@ -550,48 +620,17 @@ async function hook() {
       if (!isRefire) {
         wakeWatcher(instanceName);
       }
-      // Write a provisional heartbeat so that `check` (which may fire before
-      // the watcher process starts) does not falsely report "Watcher not running".
-      // The watcher will overwrite this with its own heartbeat once it starts;
-      // if no watcher launches within 30s the heartbeat expires naturally.
-      writeHeartbeat(instanceName);
-      // Register with local server (non-fatal)
-      try {
-        const { getTlsOptions, createIdentityVerifier } = await import('../src/config.ts');
-        const tlsOpts = getTlsOptions(config);
-        const requestFn = tlsOpts
-          ? (await import('node:https')).request
-          : request;
-        const payload = JSON.stringify({ instance: instanceName, pid: getClaudeCodePid() });
-        await new Promise<void>((resolve) => {
-          const req = requestFn({
-            hostname: '127.0.0.1',
-            port,
-            path: '/api/registry',
-            method: 'POST',
-            timeout: 2000,
-            ...(tlsOpts ? { ...tlsOpts, checkServerIdentity: createIdentityVerifier(config.identity) } : {}),
-            headers: {
-              'Content-Type': 'application/json',
-              'Content-Length': Buffer.byteLength(payload),
-              ...(authToken && { 'Authorization': `Bearer ${authToken}` }),
-            },
-          }, () => resolve());
-          req.on('error', () => resolve());
-          req.on('timeout', () => { req.destroy(); resolve(); });
-          req.write(payload);
-          req.end();
-        });
-      } catch { /* non-fatal */ }
       // Persist instance name for subsequent hooks (survives cwd changes)
       writeSessionInstance(instanceName);
-      // Check signal files → stdout
+      // Check signal files → stdout (fallback for when server is down)
       const signal = checkSignalFiles(instanceName);
       if (signal) process.stdout.write(signal + '\n');
-      if (isWatcherSnoozed(instanceName)) {
-        process.stdout.write('[ICC] Watcher snoozed\n');
+      // Query server for connection status + unread count (non-fatal)
+      const startupResult = await hookRequest('/api/hook/startup', { instance: instanceName });
+      if (startupResult?.connected) {
+        process.stdout.write(`ICC: connected, ${startupResult.unreadCount} unread. Run /watch to activate.\n`);
       } else {
-        process.stdout.write('[ICC] Start mail watcher\n');
+        process.stdout.write('ICC: server not reachable. Run /watch to activate when ready.\n');
       }
       break;
     }
@@ -600,9 +639,10 @@ async function hook() {
       // Check signal files → stdout
       const signal = checkSignalFiles(instanceName);
       if (signal) process.stdout.write(signal + '\n');
-      // Check watcher liveness → stdout if not running
-      if (!isWatcherSnoozed(instanceName) && !isHeartbeatFresh(instanceName) && !isWatcherAlive(instanceName)) {
-        process.stdout.write('[ICC] Watcher not running\n');
+      // Send heartbeat to server if session is activated
+      const token = getSessionToken();
+      if (token) {
+        hookRequest('/api/hook/heartbeat', { sessionToken: token }).catch(() => {});
       }
       break;
     }
@@ -634,6 +674,23 @@ async function hook() {
       if (isWatcherAlive(instanceName)) {
         process.stdout.write('[ICC] Watcher already active — do not spawn another\n');
         break;
+      }
+
+      // Register with server if no session token exists yet
+      if (!getSessionToken()) {
+        const regResult = await hookRequest('/api/hook/watch', {
+          instance: instanceName,
+          pid: getClaudeCodePid(),
+          force: !!flags.force,
+          ...(flags.name ? { name: flags.name } : {}),
+        });
+        if (regResult?.status === 'active' && regResult.sessionToken) {
+          writeSessionToken(regResult.sessionToken);
+        } else if (regResult?.status === 'deferred') {
+          process.stdout.write(`[ICC] Registration deferred: ${regResult.message}\n`);
+          break;
+        }
+        // If server unreachable (null), proceed with watcher anyway
       }
 
       const interval = parseInt((flags.interval as string) || '5', 10) * 1000;
@@ -718,6 +775,12 @@ async function hook() {
       // Clean up files in case SIGTERM handler didn't fire
       deleteWatcherPid(instanceName);
       deleteHeartbeat(instanceName);
+      // Deregister session with server
+      const endToken = getSessionToken();
+      if (endToken) {
+        await hookRequest('/api/hook/session-end', { sessionToken: endToken });
+      }
+      deleteSessionToken();
       deleteSessionInstance();
       wakeWatcher(instanceName);  // Remove snooze file — clean slate for next session
       break;
@@ -800,6 +863,12 @@ async function hook() {
     }
 
     case 'snooze-watcher': {
+      // Deregister session with server if active
+      const snoozeToken = getSessionToken();
+      if (snoozeToken) {
+        await hookRequest('/api/hook/snooze', { sessionToken: snoozeToken });
+        deleteSessionToken();
+      }
       snoozeWatcher(instanceName);
       process.stdout.write(`[ICC] Watcher snoozed for ${instanceName}\n`);
       break;
@@ -807,6 +876,14 @@ async function hook() {
 
     case 'wake-watcher': {
       wakeWatcher(instanceName);
+      // Re-register with server
+      const wakeResult = await hookRequest('/api/hook/wake', {
+        instance: instanceName,
+        pid: getClaudeCodePid(),
+      });
+      if (wakeResult?.status === 'active' && wakeResult.sessionToken) {
+        writeSessionToken(wakeResult.sessionToken);
+      }
       process.stdout.write('[ICC] Start mail watcher\n');
       break;
     }

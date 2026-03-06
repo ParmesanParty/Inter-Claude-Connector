@@ -33,45 +33,39 @@ describe('Heartbeat: watch writes heartbeat file', () => {
   });
 });
 
-describe('Heartbeat: check detects missing watcher', () => {
+describe('Heartbeat: check sends heartbeat (no local liveness check)', () => {
   let tmp: ReturnType<typeof createTmpHome>;
   beforeEach(() => { tmp = createTmpHome(); });
   afterEach(() => { tmp.cleanup(); });
 
-  it('check outputs watcher-not-running when no heartbeat exists', () => {
+  it('check does not report watcher-not-running (heartbeat-based now)', () => {
     const stdout = runHook('check', { HOME: tmp.tmpHome });
-    assert.ok(stdout.includes('[ICC] Watcher not running'), 'should report watcher not running');
-  });
-
-  it('check is silent when heartbeat is fresh', () => {
-    const hbPath = join(tmp.tmpHome, '.icc', `watcher.${instanceName}.heartbeat`);
-    writeFileSync(hbPath, new Date().toISOString());
-
-    const stdout = runHook('check', { HOME: tmp.tmpHome });
+    // Check hook no longer reports local watcher liveness — sends heartbeat to server instead
     assert.ok(!stdout.includes('[ICC] Watcher not running'), 'should NOT report watcher not running');
   });
 
-  it('check detects stale heartbeat (>30s old)', () => {
-    const hbPath = join(tmp.tmpHome, '.icc', `watcher.${instanceName}.heartbeat`);
-    const staleTime = new Date(Date.now() - 60000).toISOString();
-    writeFileSync(hbPath, staleTime);
-
+  it('check is silent when no signal files exist', () => {
     const stdout = runHook('check', { HOME: tmp.tmpHome });
-    assert.ok(stdout.includes('[ICC] Watcher not running'), 'should detect stale heartbeat');
-    assert.ok(!existsSync(hbPath), 'should delete stale heartbeat file');
+    assert.ok(!stdout.includes('[ICC]'), 'should be silent with no signals');
   });
 });
 
-describe('Heartbeat: startup cleans up stale heartbeat', () => {
+describe('Heartbeat: startup is status-only', () => {
   let tmp: ReturnType<typeof createTmpHome>;
   beforeEach(() => { tmp = createTmpHome(); });
   afterEach(() => { tmp.cleanup(); });
 
-  it('startup writes a provisional heartbeat file', () => {
+  it('startup does not write provisional heartbeat', () => {
     const hbPath = join(tmp.tmpHome, '.icc', `watcher.${instanceName}.heartbeat`);
+    runHook('startup', { HOME: tmp.tmpHome });
+    // Startup no longer writes provisional heartbeat — watcher handles its own
+    assert.ok(!existsSync(hbPath), 'heartbeat should NOT exist after startup');
+  });
+
+  it('startup outputs activation prompt', () => {
     const stdout = runHook('startup', { HOME: tmp.tmpHome });
-    assert.ok(existsSync(hbPath), 'heartbeat should exist after startup');
-    assert.ok(stdout.includes('[ICC] Start mail watcher'));
+    assert.ok(stdout.includes('Run /watch to activate'), 'should show activation prompt');
+    assert.ok(!stdout.includes('[ICC] Start mail watcher'), 'should NOT trigger launch');
   });
 });
 
@@ -158,19 +152,20 @@ describe('Snooze: startup respects snooze state', () => {
   beforeEach(() => { tmp = createTmpHome(); });
   afterEach(() => { tmp.cleanup(); });
 
-  it('startup suppresses launch when snoozed (re-fire)', () => {
+  it('startup does not mention snooze (status-only)', () => {
     runHook('startup', { HOME: tmp.tmpHome });
     writeFileSync(join(tmp.tmpHome, '.icc', `watcher.${instanceName}.snoozed`), new Date().toISOString());
     const stdout = runHook('startup', { HOME: tmp.tmpHome });
-    assert.ok(stdout.includes('[ICC] Watcher snoozed'), 'should report snoozed');
+    // Startup is now status-only — no snooze/launch messaging
     assert.ok(!stdout.includes('[ICC] Start mail watcher'), 'should NOT trigger launch');
+    assert.ok(stdout.includes('Run /watch to activate'), 'should show activation prompt');
   });
 
   it('startup clears stale snooze on fresh session (no session file)', () => {
     writeFileSync(join(tmp.tmpHome, '.icc', `watcher.${instanceName}.snoozed`), new Date().toISOString());
     const stdout = runHook('startup', { HOME: tmp.tmpHome });
-    assert.ok(stdout.includes('[ICC] Start mail watcher'), 'should trigger launch after clearing stale snooze');
-    assert.ok(!stdout.includes('[ICC] Watcher snoozed'), 'should NOT report snoozed');
+    // Startup is status-only — just verify snooze file was cleared
+    assert.ok(stdout.includes('Run /watch to activate'), 'should show activation prompt');
     const snoozePath = join(tmp.tmpHome, '.icc', `watcher.${instanceName}.snoozed`);
     assert.ok(!existsSync(snoozePath), 'stale snooze file should be deleted');
   });
@@ -181,10 +176,11 @@ describe('Snooze: check respects snooze state', () => {
   beforeEach(() => { tmp = createTmpHome(); });
   afterEach(() => { tmp.cleanup(); });
 
-  it('check suppresses watcher-not-running when snoozed', () => {
+  it('check does not report watcher status (heartbeat-based)', () => {
     writeFileSync(join(tmp.tmpHome, '.icc', `watcher.${instanceName}.snoozed`), new Date().toISOString());
     const stdout = runHook('check', { HOME: tmp.tmpHome });
-    assert.ok(!stdout.includes('[ICC] Watcher not running'), 'should NOT report watcher not running when snoozed');
+    // Check hook no longer reports watcher liveness — it sends heartbeats instead
+    assert.ok(!stdout.includes('[ICC] Watcher not running'), 'should NOT report watcher not running');
   });
 });
 

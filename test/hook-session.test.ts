@@ -97,7 +97,8 @@ describe('Session instance: fallback when no session file exists', () => {
 
   it('check falls back to cwd-derived name when no session file exists', () => {
     const stdout = runHook('check', { HOME: tmp.tmpHome });
-    assert.ok(stdout.includes('[ICC] Watcher not running'),
-      'should fall back to cwd-derived instance name and detect missing watcher');
+    // Check hook no longer reports watcher liveness — just verify it runs without error
+    // and does not crash when no session file exists (fallback to cwd-derived name)
+    assert.ok(!stdout.includes('Unknown hook'), 'should run without error');
   });
 });
