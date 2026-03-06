@@ -1,6 +1,7 @@
 import { describe, it, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { PeerRouter } from '../src/peers.ts';
+import { writeConfig } from '../src/config.ts';
 import { createTestEnv, isolateConfig } from './helpers.ts';
 
 createTestEnv('icc-peers-test');
@@ -118,5 +119,61 @@ describe('PeerRouter: getDefaultPeer', () => {
     isolateConfig({ remotes: { alpha: { httpUrl: 'http://localhost:1' }, beta: { httpUrl: 'http://localhost:2' } } as any });
     const router = new PeerRouter();
     assert.equal(router.getDefaultPeer(), null);
+  });
+});
+
+// --- addPeer ---
+
+describe('PeerRouter: addPeer', () => {
+  it('dynamically adds a peer to the router', () => {
+    isolateConfig();
+    const router = new PeerRouter();
+    assert.deepEqual(router.listPeers(), []);
+
+    router.addPeer('gamma', { httpUrl: 'http://localhost:9999' });
+
+    assert.deepEqual(router.listPeers(), ['gamma']);
+    // Should not throw — transport exists now
+    const tm = router.getTransport('gamma');
+    assert.ok(tm);
+  });
+
+  it('replaces existing peer transport', () => {
+    isolateConfig({ remotes: { alpha: { httpUrl: 'http://localhost:1' } } as any });
+    const router = new PeerRouter();
+    const oldTm = router.getTransport('alpha');
+    router.addPeer('alpha', { httpUrl: 'http://localhost:2' });
+    const newTm = router.getTransport('alpha');
+    assert.notEqual(oldTm, newTm);
+  });
+});
+
+// --- lazy config refresh ---
+
+describe('PeerRouter: lazy config refresh on getTransport', () => {
+  it('discovers a peer added to config after construction', () => {
+    const config = isolateConfig();
+    const router = new PeerRouter();
+
+    // Peer doesn't exist yet
+    assert.deepEqual(router.listPeers(), []);
+
+    // Simulate config change persisted to disk (as writeConfig does in join/complete)
+    config.remotes['newpeer'] = { httpUrl: 'http://localhost:7777' };
+    writeConfig(config);
+
+    // getTransport should lazy-discover the new peer
+    const tm = router.getTransport('newpeer');
+    assert.ok(tm);
+    assert.ok(router.listPeers().includes('newpeer'));
+  });
+
+  it('still throws for truly nonexistent peers after refresh', () => {
+    isolateConfig();
+    const router = new PeerRouter();
+    assert.throws(
+      () => router.getTransport('does-not-exist'),
+      /Unknown peer: "does-not-exist"/
+    );
   });
 });

@@ -1,8 +1,8 @@
 import { TransportManager } from './transport/index.ts';
-import { loadConfig, getPeerIdentities } from './config.ts';
+import { loadConfig, clearConfigCache, getPeerIdentities } from './config.ts';
 import { parseAddress } from './address.ts';
 import { createLogger } from './util/logger.ts';
-import type { Message } from './types.ts';
+import type { Message, RemoteConfig } from './types.ts';
 
 const log = createLogger('peers');
 
@@ -20,8 +20,24 @@ export class PeerRouter {
     }
   }
 
+  addPeer(identity: string, peerConfig: RemoteConfig): void {
+    log.info(`Adding peer "${identity}" dynamically`);
+    this._peers.set(identity, new TransportManager(peerConfig, identity));
+  }
+
   getTransport(peerIdentity: string): TransportManager {
-    const tm = this._peers.get(peerIdentity);
+    let tm = this._peers.get(peerIdentity);
+    if (!tm) {
+      // Lazy refresh: re-read config in case a new peer was added at runtime
+      clearConfigCache();
+      const config = loadConfig({ reload: true });
+      for (const identity of getPeerIdentities(config)) {
+        if (!this._peers.has(identity)) {
+          this.addPeer(identity, config.remotes[identity]!);
+        }
+      }
+      tm = this._peers.get(peerIdentity);
+    }
     if (!tm) {
       throw new Error(`Unknown peer: "${peerIdentity}". Known peers: ${this.listPeers().join(', ') || '(none)'}`);
     }
