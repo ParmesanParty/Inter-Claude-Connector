@@ -4,10 +4,7 @@ services:
     # build: .  # uncomment to build locally
     container_name: icc
     restart: unless-stopped
-    ports:
-      - "3179:3179"
-      # - "3180:3180"  # Uncomment with ICC_WEB_ENABLED
-      # - "4179:4179"  # Uncomment with ICC_ENROLL_ENABLED
+    network_mode: host
     volumes:
       - icc-data:/home/icc/.icc
     environment: {}
