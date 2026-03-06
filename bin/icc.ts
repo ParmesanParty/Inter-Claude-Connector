@@ -940,7 +940,7 @@ async function instance() {
 
 async function tls() {
   const subcommand = positional[0];
-  const { loadConfig } = await import('../src/config.ts');
+  const { loadConfig, getLocalToken } = await import('../src/config.ts');
 
   switch (subcommand) {
     case 'init': {
@@ -983,7 +983,7 @@ async function tls() {
       // Allow self-enrollment
       peerConfigs[config.identity] = { httpUrl: `http://127.0.0.1:${config.server.port}` };
 
-      const server = createEnrollmentServer({ caDir, peerConfigs, port });
+      const server = createEnrollmentServer({ caDir, peerConfigs, port, reloadToken: getLocalToken(config) || undefined });
       const info = await server.start();
       console.log(`Enrollment server on port ${info.port}`);
       console.log(`Known peers: ${Object.keys(peerConfigs).join(', ')}`);
@@ -1264,20 +1264,22 @@ async function invite(): Promise<void> {
   const enrollPort = config.server.enrollPort;
   const localToken = getLocalToken(config);
   try {
-    await httpJSON(`http://127.0.0.1:${enrollPort}/enroll/reload`, 'POST', {}, localToken);
+    const reloadRes = await httpJSON(`http://127.0.0.1:${enrollPort}/enroll/reload`, 'POST', {}, localToken);
+    if (reloadRes.error) throw new Error(reloadRes.error);
     console.log('Enrollment server reloaded');
-  } catch {
-    console.log('Note: enrollment server not running or reload failed — restart manually');
+  } catch (err) {
+    console.log(`Note: enrollment server reload failed — ${(err as Error).message}`);
   }
 
   // 6. Register join token with enrollment server
   try {
-    await httpJSON(`http://127.0.0.1:${enrollPort}/enroll/register-invite`, 'POST', {
+    const regRes = await httpJSON(`http://127.0.0.1:${enrollPort}/enroll/register-invite`, 'POST', {
       identity, joinToken, ip: host, port: peerPort,
     }, localToken);
+    if (regRes.error) throw new Error(regRes.error);
     console.log('Join token registered with enrollment server');
-  } catch {
-    console.log('Note: could not register join token — enrollment server may not be running');
+  } catch (err) {
+    console.error(`Error: could not register join token — ${(err as Error).message}`);
   }
 
   // 7. Build setup string
