@@ -237,4 +237,16 @@ describe('Enrollment Server', () => {
 
     await joinEnrollServer.stop();
   });
+
+  it('tcpReachable returns true for open port and false for closed port', async () => {
+    const { tcpReachable } = await import('../src/util/net.ts');
+
+    // Test against the enrollment server port (open)
+    const reachable = await tcpReachable('127.0.0.1', enrollPort, 2000);
+    assert.equal(reachable, true);
+
+    // Test against port 1 (closed/unreachable)
+    const unreachable = await tcpReachable('127.0.0.1', 1, 2000);
+    assert.equal(unreachable, false);
+  });
 });
