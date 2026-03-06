@@ -1213,15 +1213,12 @@ async function tls() {
 async function invite(): Promise<void> {
   const identity = positional[0];
   if (!identity) {
-    console.error('Usage: icc invite <identity> --ip <ip> [--port 3179]');
+    console.error('Usage: icc invite <identity> [--host <address>] [--port 3179]');
     process.exit(1);
   }
 
-  const ip = flags.ip as string;
-  if (!ip) {
-    console.error('--ip is required');
-    process.exit(1);
-  }
+  // Accept --host or --ip (backwards compat alias)
+  const host = (flags.host || flags.ip) as string | undefined;
 
   const peerPort = flags.port ? parseInt(flags.port as string, 10) : 3179;
   const { loadConfig, writeConfig, clearConfigCache, getLocalToken } = await import('../src/config.ts');
@@ -1244,7 +1241,9 @@ async function invite(): Promise<void> {
 
   // 1. Add remote with http:// URL (will be upgraded to https after enrollment)
   if (!config.remotes) config.remotes = {};
-  config.remotes[identity] = { httpUrl: `http://${ip}:${peerPort}` };
+  if (host) {
+    config.remotes[identity] = { httpUrl: `http://${host}:${peerPort}` };
+  }
 
   // 2. Generate peerToken for inbound auth from new host
   if (!config.server.peerTokens) config.server.peerTokens = {};
@@ -1256,7 +1255,9 @@ async function invite(): Promise<void> {
 
   // 4. Save config
   writeConfig(config);
-  console.log(`Added ${identity} to remotes (http://${ip}:${peerPort})`);
+  if (host) {
+    console.log(`Added ${identity} to remotes (http://${host}:${peerPort})`);
+  }
   console.log(`Generated peer token for ${identity}`);
 
   // 5. Notify enrollment server to reload config
@@ -1272,14 +1273,26 @@ async function invite(): Promise<void> {
   // 6. Register join token with enrollment server
   try {
     await httpJSON(`http://127.0.0.1:${enrollPort}/enroll/register-invite`, 'POST', {
-      identity, joinToken, ip, port: peerPort,
+      identity, joinToken, ip: host || '0.0.0.0', port: peerPort,
     }, localToken);
     console.log('Join token registered with enrollment server');
   } catch {
     console.log('Note: could not register join token — enrollment server may not be running');
   }
 
-  console.log(`\nRun on ${identity}:`);
+  // 7. Build setup string
+  const setupPayload: Record<string, unknown> = {
+    caIdentity: config.identity,
+    caHost: host ? host : '0.0.0.0',
+    caPort: enrollPort,
+    joinToken,
+  };
+  if (host) setupPayload.host = host;
+  const setupString = 'icc:' + Buffer.from(JSON.stringify(setupPayload)).toString('base64url');
+
+  console.log(`\nSetup string (paste into the setup wizard on the new host):`);
+  console.log(`  ${setupString}`);
+  console.log(`\nOr run on ${identity}:`);
   console.log(`  icc join --ca ${config.identity} --token ${joinToken}`);
 }
 
@@ -1422,7 +1435,7 @@ Commands:
   hook <subcommand>                        Lifecycle hooks for Claude Code sessions
   instance <resolve [dir]|list>            Manage persistent instance names
   tls <init|serve|enroll|enroll-self|renew|status>  TLS certificate management
-  invite <identity> --ip <ip> [--port N]  Generate join token for new host (CA only)
+  invite <identity> [--host <addr>] [--port N]  Generate join token for new host (CA only)
   join --ca <id> --token <tok> [--url U]  Join mesh using an invite token
   help                                      Show this help
 
