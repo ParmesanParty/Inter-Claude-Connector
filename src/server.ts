@@ -13,7 +13,7 @@ import { createLogger } from './util/logger.ts';
 import { readBody, sendJSON as baseSendJSON } from './util/http.ts';
 import { init as initInbox, push as inboxPush, getUnread, getAll as inboxGetAll, getById as inboxGetById, markRead, markAllRead, remove as inboxRemove, purgeStale, setNotifier, setReceiptSender, isReceipt, subscribe as inboxSubscribe } from './inbox.ts';
 import { safeReadFile, safeExec } from './util/exec.ts';
-import { register as registryRegister, list as registryList, deregister as registryDeregister, sessionRegister, sessionDeregister, sessionHeartbeat, sessionSnooze, onWatcherDisconnect, sessionReconnect, getSessionState } from './registry.ts';
+import { register as registryRegister, list as registryList, deregister as registryDeregister, sessionRegister, sessionDeregister, sessionHeartbeat, sessionSnooze, onWatcherDisconnect, sessionReconnect } from './registry.ts';
 import { listAll as instancesListAll } from './instances.ts';
 import { createDesktopNotifier } from './notify.ts';
 import { registrySchema, inboxSchema, execSchema, readfileSchema } from './api-schemas.ts';

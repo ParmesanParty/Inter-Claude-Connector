@@ -418,22 +418,6 @@ function deleteHeartbeat(instanceName: string): void {
   } catch { /* non-fatal — file may not exist */ }
 }
 
-function isHeartbeatFresh(instanceName: string): boolean {
-  const path = heartbeatPath(instanceName);
-  try {
-    if (!existsSync(path)) return false;
-    const timestamp = readFileSync(path, 'utf-8').trim();
-    const age = Date.now() - new Date(timestamp).getTime();
-    if (age > 30000) {
-      // Stale — clean up
-      try { unlinkSync(path); } catch { /* ignore */ }
-      return false;
-    }
-    return true;
-  } catch {
-    return false;
-  }
-}
 
 function watcherPidPath(instanceName: string): string {
   return join(homedir(), '.icc', `watcher.${instanceName}.pid`);
@@ -472,9 +456,6 @@ function snoozePath(instanceName: string): string {
   return join(homedir(), '.icc', `watcher.${instanceName}.snoozed`);
 }
 
-function isWatcherSnoozed(instanceName: string): boolean {
-  return existsSync(snoozePath(instanceName));
-}
 
 function snoozeWatcher(instanceName: string): void {
   try { writeFileSync(snoozePath(instanceName), new Date().toISOString()); } catch {}
