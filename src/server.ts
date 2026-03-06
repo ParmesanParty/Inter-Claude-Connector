@@ -5,7 +5,7 @@ import { readFileSync, existsSync, statSync, unlinkSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { homedir } from 'node:os';
 import { timingSafeEqual } from 'node:crypto';
-import { loadConfig, getFullAddress, getOutboundToken, getTlsOptions, writeConfig, clearConfigCache } from './config.ts';
+import { loadConfig, getFullAddress, getOutboundToken, getTlsOptions, writeConfig, clearConfigCache, getPeerIdentities } from './config.ts';
 import { renewIfNeeded } from './tls.ts';
 import { buildAddress, parseAddress } from './address.ts';
 import { validate, createPong, serialize } from './protocol.ts';
@@ -13,7 +13,7 @@ import { createLogger } from './util/logger.ts';
 import { readBody, sendJSON as baseSendJSON } from './util/http.ts';
 import { init as initInbox, push as inboxPush, getUnread, getAll as inboxGetAll, getById as inboxGetById, markRead, markAllRead, remove as inboxRemove, purgeStale, setNotifier, setReceiptSender, isReceipt, subscribe as inboxSubscribe } from './inbox.ts';
 import { safeReadFile, safeExec } from './util/exec.ts';
-import { register as registryRegister, list as registryList, deregister as registryDeregister } from './registry.ts';
+import { register as registryRegister, list as registryList, deregister as registryDeregister, sessionRegister, sessionDeregister, sessionHeartbeat, sessionSnooze, onWatcherDisconnect, sessionReconnect, getSessionState } from './registry.ts';
 import { listAll as instancesListAll } from './instances.ts';
 import { createDesktopNotifier } from './notify.ts';
 import { registrySchema, inboxSchema, execSchema, readfileSchema } from './api-schemas.ts';
@@ -162,6 +162,7 @@ interface ICCServerOptions {
   port?: number;
   host?: string;
   noAuth?: boolean;
+  enableMcp?: boolean;
 }
 
 interface ICCServer {
@@ -189,6 +190,12 @@ export function createICCServer(options: ICCServerOptions = {}): ICCServer {
   const startTime = Date.now();
   const sseConnections = new Set<ServerResponse>();
 
+  // MCP HTTP transport (lazy-initialized when enableMcp is true)
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- transport type from MCP SDK
+  let mcpTransport: any = null;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- McpServer from MCP SDK
+  let mcpServer: any = null;
+
   // Initialize inbox, desktop notifications, and read receipts
   initInbox();
   setNotifier(createDesktopNotifier(config));
@@ -199,6 +206,12 @@ export function createICCServer(options: ICCServerOptions = {}): ICCServer {
     // Strip query string for route matching
     const url = (req.url || '').split('?')[0]!;
     log.debug(`${method} ${url}`);
+
+    // MCP HTTP transport — handle /mcp path
+    if (mcpTransport && url === '/mcp') {
+      await mcpTransport.handleRequest(req, res);
+      return;
+    }
 
     const corsHeaders = getCorsHeaders(req, config);
     const sendJSON = (r: ServerResponse, statusCode: number, data: unknown): void => {
@@ -670,8 +683,245 @@ export function createICCServer(options: ICCServerOptions = {}): ICCServer {
       return;
     }
 
+    // ── Session lifecycle endpoints ──────────────────────────────────
+
+    // POST /api/hook/startup — status-only, no registration
+    if (method === 'POST' && url === '/api/hook/startup') {
+      try {
+        const body = JSON.parse(await readBody(req));
+        const instance = body.instance;
+        if (!instance) {
+          sendJSON(res, 400, { error: 'Missing required field: instance' });
+          return;
+        }
+        const unread = getUnread();
+        const unreadCount = unread.filter(m => !isReceipt(m)).length;
+        sendJSON(res, 200, { connected: true, unreadCount });
+      } catch (err) {
+        sendJSON(res, 400, { error: (err as Error).message });
+      }
+      return;
+    }
+
+    // POST /api/hook/watch — register instance + generate session token
+    if (method === 'POST' && url === '/api/hook/watch') {
+      try {
+        const body = JSON.parse(await readBody(req));
+        const { instance, pid, force, name } = body;
+        if (!instance) {
+          sendJSON(res, 400, { error: 'Missing required field: instance' });
+          return;
+        }
+        const result = sessionRegister({ instance, pid, force, name });
+        sendJSON(res, 200, result);
+      } catch (err) {
+        sendJSON(res, 400, { error: (err as Error).message });
+      }
+      return;
+    }
+
+    // POST /api/hook/heartbeat — update lastSeen
+    if (method === 'POST' && url === '/api/hook/heartbeat') {
+      try {
+        const body = JSON.parse(await readBody(req));
+        const { sessionToken } = body;
+        if (!sessionToken) {
+          sendJSON(res, 400, { error: 'Missing required field: sessionToken' });
+          return;
+        }
+        const ok = sessionHeartbeat(sessionToken);
+        sendJSON(res, 200, { ok });
+      } catch (err) {
+        sendJSON(res, 400, { error: (err as Error).message });
+      }
+      return;
+    }
+
+    // POST /api/hook/snooze — eager deregistration
+    if (method === 'POST' && url === '/api/hook/snooze') {
+      try {
+        const body = JSON.parse(await readBody(req));
+        const { sessionToken } = body;
+        if (!sessionToken) {
+          sendJSON(res, 400, { error: 'Missing required field: sessionToken' });
+          return;
+        }
+        const ok = sessionSnooze(sessionToken);
+        sendJSON(res, 200, { ok });
+      } catch (err) {
+        sendJSON(res, 400, { error: (err as Error).message });
+      }
+      return;
+    }
+
+    // POST /api/hook/wake — re-register after snooze
+    if (method === 'POST' && url === '/api/hook/wake') {
+      try {
+        const body = JSON.parse(await readBody(req));
+        const { instance, pid, force } = body;
+        if (!instance) {
+          sendJSON(res, 400, { error: 'Missing required field: instance' });
+          return;
+        }
+        const result = sessionRegister({ instance, pid, force });
+        sendJSON(res, 200, result);
+      } catch (err) {
+        sendJSON(res, 400, { error: (err as Error).message });
+      }
+      return;
+    }
+
+    // POST /api/hook/session-end — clean deregistration
+    if (method === 'POST' && url === '/api/hook/session-end') {
+      try {
+        const body = JSON.parse(await readBody(req));
+        const { sessionToken } = body;
+        if (!sessionToken) {
+          sendJSON(res, 400, { error: 'Missing required field: sessionToken' });
+          return;
+        }
+        const ok = sessionDeregister(sessionToken);
+        sendJSON(res, 200, { ok });
+      } catch (err) {
+        sendJSON(res, 400, { error: (err as Error).message });
+      }
+      return;
+    }
+
+    // POST /api/hook/pre-bash — SSH warning + watcher guard
+    if (method === 'POST' && url === '/api/hook/pre-bash') {
+      try {
+        const body = JSON.parse(await readBody(req));
+        const command: string = body.tool_input?.command || '';
+
+        // SSH warning
+        if (/\bssh\s/.test(command)) {
+          const peers = getPeerIdentities(config);
+          const sshTarget = command.match(/\bssh\s+(?:-[^\s]+\s+)*(\S+)/)?.[1] || '';
+          if (peers.some((p: string) => sshTarget.includes(p))) {
+            sendJSON(res, 200, {
+              hookSpecificOutput: {
+                hookEventName: 'PreToolUse',
+                additionalContext: `REMINDER: "${sshTarget}" is an ICC peer. Prefer ICC tools (send_message, run_remote_command, read_remote_file) over direct SSH.`,
+              },
+            });
+            return;
+          }
+        }
+
+        // Watcher duplicate guard
+        if (/icc\s+hook\s+watch\b/.test(command) && !/--timeout\s+[012]\b/.test(command)) {
+          // Check if any session-based watcher is active for any instance
+          // (Docker mode uses /api/watch, not icc hook watch, so this mainly catches bare-metal attempts)
+          sendJSON(res, 200, {});
+          return;
+        }
+
+        sendJSON(res, 200, {});
+      } catch (err) {
+        sendJSON(res, 400, { error: (err as Error).message });
+      }
+      return;
+    }
+
+    // POST /api/hook/pre-icc-message — convention reminder
+    if (method === 'POST' && url === '/api/hook/pre-icc-message') {
+      try {
+        const body = JSON.parse(await readBody(req));
+        const msgBody: string = body.tool_input?.body || '';
+        const hasStatusParam = !!body.tool_input?.status;
+
+        const missing: string[] = [];
+        if (!msgBody.includes('[TOPIC:')) missing.push('[TOPIC: x]');
+        if (!hasStatusParam && !msgBody.includes('[STATUS:')) missing.push('the `status` parameter (preferred) or [STATUS: ...] in body');
+
+        if (missing.length > 0) {
+          sendJSON(res, 200, {
+            hookSpecificOutput: {
+              hookEventName: 'PreToolUse',
+              additionalContext: `ICC message convention reminder: messages should include ${missing.join(' and ')}. Consider adding them.`,
+            },
+          });
+          return;
+        }
+        sendJSON(res, 200, {});
+      } catch (err) {
+        sendJSON(res, 400, { error: (err as Error).message });
+      }
+      return;
+    }
+
+    // GET /api/watch — long-poll endpoint for mail watcher
+    if (method === 'GET' && url === '/api/watch') {
+      const queryUrl = new URL(req.url || '/', 'http://localhost');
+      const instance = queryUrl.searchParams.get('instance');
+      const sessionToken = queryUrl.searchParams.get('sessionToken');
+
+      if (!instance) {
+        sendJSON(res, 400, { error: 'Missing required param: instance' });
+        return;
+      }
+
+      // Duplicate guard: check if a watcher is already connected for this session
+      if (sessionToken && activeWatchers.has(sessionToken)) {
+        sendJSON(res, 200, { event: 'duplicate' });
+        return;
+      }
+
+      // Reconnect session if token provided (handles watcher cycle relaunch)
+      if (sessionToken) {
+        sessionReconnect(sessionToken);
+      }
+
+      // Immediate inbox check — return immediately if unread messages exist
+      const unread = getUnread();
+      const realUnread = unread.filter(m => !isReceipt(m));
+      if (realUnread.length > 0) {
+        sendJSON(res, 200, { event: 'mail', unreadCount: realUnread.length });
+        return;
+      }
+
+      // Long-poll: block until message arrives or timeout
+      const WATCH_TIMEOUT_MS = 585_000; // 585s (< curl's 591s to prevent timeout race)
+
+      if (sessionToken) {
+        activeWatchers.set(sessionToken, res);
+      }
+
+      const cleanup = () => {
+        if (sessionToken) {
+          activeWatchers.delete(sessionToken);
+          onWatcherDisconnect(sessionToken);
+        }
+        unsubscribe();
+        clearTimeout(timer);
+      };
+
+      const unsubscribe = inboxSubscribe((msg) => {
+        if (isReceipt(msg)) return; // Don't wake on receipts
+        cleanup();
+        sendJSON(res, 200, { event: 'mail', unreadCount: 1 });
+      });
+
+      const timer = setTimeout(() => {
+        cleanup();
+        sendJSON(res, 200, { event: 'timeout' });
+      }, WATCH_TIMEOUT_MS);
+      timer.unref();
+
+      // Connection close handler (client disconnect)
+      req.on('close', () => {
+        cleanup();
+      });
+
+      return;
+    }
+
     sendJSON(res, 404, { error: 'Not found' });
   };
+
+  // Active watcher connections (keyed by sessionToken)
+  const activeWatchers = new Map<string, ServerResponse>();
 
   const server = tlsOpts
     ? createSecureServer({ ...tlsOpts, requestCert: true, rejectUnauthorized: true }, handler)
@@ -717,7 +967,22 @@ export function createICCServer(options: ICCServerOptions = {}): ICCServer {
           ));
         }
       }
-      return new Promise<{ port: number; host: string }>((resolve) => {
+      return new Promise<{ port: number; host: string }>(async (resolve) => {
+        // Initialize MCP HTTP transport if enabled
+        if (options.enableMcp) {
+          try {
+            const { StreamableHTTPServerTransport } = await import('@modelcontextprotocol/sdk/server/streamableHttp.js');
+            const { createMCPServer } = await import('./mcp.ts');
+            mcpTransport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
+            const mcp = createMCPServer();
+            mcpServer = mcp.server;
+            await mcpServer.connect(mcpTransport);
+            log.info('MCP HTTP transport mounted at /mcp');
+          } catch (err) {
+            log.error(`Failed to initialize MCP HTTP transport: ${(err as Error).message}`);
+          }
+        }
+
         server.listen(port, host, () => {
           const addr = server.address() as { port: number };
           const protocol = tlsOpts ? 'HTTPS (mTLS)' : 'HTTP';
@@ -756,7 +1021,7 @@ export function createICCServer(options: ICCServerOptions = {}): ICCServer {
         });
       });
     },
-    stop() {
+    async stop() {
       if (cleanupTimer) {
         clearInterval(cleanupTimer);
         cleanupTimer = null;
@@ -765,11 +1030,25 @@ export function createICCServer(options: ICCServerOptions = {}): ICCServer {
         clearInterval(renewalTimer);
         renewalTimer = null;
       }
+      // Close MCP transport if active
+      if (mcpTransport) {
+        try { await mcpTransport.close(); } catch { /* ignore */ }
+        mcpTransport = null;
+      }
+      if (mcpServer) {
+        try { await mcpServer.close(); } catch { /* ignore */ }
+        mcpServer = null;
+      }
       // End all SSE connections so server.close() can drain
       for (const res of sseConnections) {
         res.end();
       }
       sseConnections.clear();
+      // End all active watchers
+      for (const [, watchRes] of activeWatchers) {
+        watchRes.end();
+      }
+      activeWatchers.clear();
       return new Promise<void>((resolve) => {
         server.close(() => resolve());
       });

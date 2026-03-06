@@ -1,0 +1,8 @@
+node_modules/
+.icc/
+.git/
+.worktrees/
+docs/plans/
+.playwright-mcp/
+test/
+*.log

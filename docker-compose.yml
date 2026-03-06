@@ -1,0 +1,24 @@
+services:
+  icc:
+    image: parmesanparty/icc:latest
+    # build: .  # uncomment to build locally
+    container_name: icc
+    restart: unless-stopped
+    ports:
+      - "3179:3179"
+      # - "3180:3180"  # Uncomment with ICC_WEB_ENABLED
+      # - "4179:4179"  # Uncomment with ICC_ENROLL_ENABLED
+    volumes:
+      - icc-data:/home/icc/.icc
+    environment: {}
+      # ICC_WEB_ENABLED: "true"
+      # ICC_ENROLL_ENABLED: "true"
+    healthcheck:
+      test: ["CMD", "node", "docker/healthcheck.ts"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  icc-data:
