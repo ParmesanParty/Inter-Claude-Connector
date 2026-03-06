@@ -388,6 +388,11 @@ function getWizardHTML(): string {
         <label for="join-setup-string">Paste the setup string from <code style="color: #e7e9ea;">icc invite</code></label>
         <input type="text" id="join-setup-string" placeholder="icc:eyJ..." oninput="onSetupStringInput()">
 
+        <div id="join-ca-host-row" class="hidden">
+          <label for="join-ca-host-from-setup">CA Host Address (IP or hostname)</label>
+          <input type="text" id="join-ca-host-from-setup" placeholder="e.g. 192.168.1.100 or server.local">
+        </div>
+
         <div id="join-own-host-row" class="hidden">
           <label for="join-own-host">This Host's Address (IP or hostname, reachable by CA)</label>
           <input type="text" id="join-own-host" placeholder="e.g. 192.168.1.101 or myhost.local">
@@ -515,6 +520,11 @@ function parseSetupString(raw) {
 function onSetupStringInput() {
   const raw = document.getElementById('join-setup-string').value;
   const parsed = parseSetupString(raw);
+  if (parsed && !parsed.caHost) {
+    document.getElementById('join-ca-host-row').classList.remove('hidden');
+  } else {
+    document.getElementById('join-ca-host-row').classList.add('hidden');
+  }
   if (parsed && !parsed.host) {
     document.getElementById('join-own-host-row').classList.remove('hidden');
   } else {
@@ -532,7 +542,7 @@ async function joinMesh() {
   if (parsed) {
     // Setup string path
     caIdentity = parsed.caIdentity;
-    caHost = parsed.caHost;
+    caHost = parsed.caHost || document.getElementById('join-ca-host-from-setup').value.trim();
     caPort = parsed.caPort || 4179;
     joinToken = parsed.joinToken;
     ownHost = parsed.host || document.getElementById('join-own-host').value.trim();

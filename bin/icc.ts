@@ -1283,11 +1283,13 @@ async function invite(): Promise<void> {
   // 7. Build setup string
   const setupPayload: Record<string, unknown> = {
     caIdentity: config.identity,
-    caHost: host ? host : '0.0.0.0',
     caPort: enrollPort,
     joinToken,
   };
-  if (host) setupPayload.host = host;
+  if (host) {
+    setupPayload.caHost = host;
+    setupPayload.host = host;
+  }
   const setupString = 'icc:' + Buffer.from(JSON.stringify(setupPayload)).toString('base64url');
 
   console.log(`\nSetup string (paste into the setup wizard on the new host):`);
