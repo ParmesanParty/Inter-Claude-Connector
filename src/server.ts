@@ -307,6 +307,11 @@ export function createICCServer(options: ICCServerOptions = {}): ICCServer {
             body: '{ ids: ["<id>", ...] }',
             response: '{ ok: true, deleted: <count> }',
           },
+          'GET /setup/claude-code': {
+            auth: false,
+            description: 'Returns structured JSON with everything Claude Code needs to self-configure: MCP config, hooks, CLAUDE.md content, and skill definitions. Designed for bootstrapping — Claude Code fetches this endpoint and applies the configs.',
+            response: '{ instructions, mcp: { target, mergeKey, config }, hooks: { target, mergeKey, config }, claudeMd: { target, append, content }, skills: { watch, snooze, wake }, postSetup }',
+          },
         },
         protocol: {
           messageTypes: ['error', 'ping', 'pong'],
@@ -375,6 +380,260 @@ export function createICCServer(options: ICCServerOptions = {}): ICCServer {
       } catch {
         sendJSON(res, 500, { error: 'Challenge read error' });
       }
+      return;
+    }
+
+    // GET /setup/claude-code — bootstrapping endpoint for Claude Code self-configuration
+    // No auth required — this is the first thing a new user hits before auth exists.
+    // Contains no secrets (hooks use session-token flow, MCP URL needs no token).
+    if (method === 'GET' && url === '/setup/claude-code') {
+      const serverPort = port;
+      sendJSON(res, 200, {
+        instructions: 'Apply these configurations to integrate Claude Code with this ICC server. For each config file: create parent directories if needed, merge into existing content (do not overwrite unrelated keys). Write each skill file to the specified target path (create directories as needed). After writing all files, tell the user to restart Claude Code for MCP changes to take effect.',
+        mcp: {
+          target: '~/.claude.json',
+          mergeKey: 'mcpServers.icc',
+          config: { type: 'url', url: `http://localhost:${serverPort}/mcp` },
+        },
+        hooks: {
+          target: '~/.claude/settings.json',
+          mergeKey: 'hooks',
+          config: {
+            SessionStart: [
+              {
+                matcher: 'startup',
+                hooks: [{
+                  type: 'command',
+                  command: `curl -sf -X POST http://localhost:${serverPort}/api/hook/startup -H 'Content-Type: application/json' -d '{"instance":"'"$(basename $PWD)"'"}'`,
+                }],
+              },
+              {
+                matcher: 'resume',
+                hooks: [{
+                  type: 'command',
+                  command: `curl -sf -X POST http://localhost:${serverPort}/api/hook/startup -H 'Content-Type: application/json' -d '{"instance":"'"$(basename $PWD)"'"}'`,
+                }],
+              },
+              {
+                matcher: 'compact',
+                hooks: [{
+                  type: 'command',
+                  command: `ST=$(cat /tmp/icc-session-$PPID.token 2>/dev/null); [ -n "$ST" ] && curl -sf -X POST http://localhost:${serverPort}/api/hook/heartbeat -H 'Content-Type: application/json' -d "{\\"sessionToken\\":\\"$ST\\"}" || true`,
+                }],
+              },
+              {
+                matcher: 'clear',
+                hooks: [{
+                  type: 'command',
+                  command: `curl -sf -X POST http://localhost:${serverPort}/api/hook/startup -H 'Content-Type: application/json' -d '{"instance":"'"$(basename $PWD)"'"}'`,
+                }],
+              },
+            ],
+            UserPromptSubmit: [
+              {
+                hooks: [{
+                  type: 'command',
+                  command: `ST=$(cat /tmp/icc-session-$PPID.token 2>/dev/null); [ -n "$ST" ] && curl -sf -X POST http://localhost:${serverPort}/api/hook/heartbeat -H 'Content-Type: application/json' -d "{\\"sessionToken\\":\\"$ST\\"}" || true`,
+                }],
+              },
+            ],
+            PreToolUse: [
+              {
+                matcher: 'Bash',
+                hooks: [{
+                  type: 'command',
+                  command: `cat | curl -sf -X POST http://localhost:${serverPort}/api/hook/pre-bash -H 'Content-Type: application/json' -d @-`,
+                }],
+              },
+              {
+                matcher: 'mcp__icc__send_message|mcp__icc__respond_to_message',
+                hooks: [{
+                  type: 'command',
+                  command: `cat | curl -sf -X POST http://localhost:${serverPort}/api/hook/pre-icc-message -H 'Content-Type: application/json' -d @-`,
+                }],
+              },
+            ],
+            SessionEnd: [
+              {
+                hooks: [{
+                  type: 'command',
+                  command: `ST=$(cat /tmp/icc-session-$PPID.token 2>/dev/null); [ -n "$ST" ] && curl -sf -X POST http://localhost:${serverPort}/api/hook/session-end -H 'Content-Type: application/json' -d "{\\"sessionToken\\":\\"$ST\\"}" || true; rm -f /tmp/icc-session-$PPID.token`,
+                }],
+              },
+            ],
+          },
+        },
+        claudeMd: {
+          target: '~/.claude/CLAUDE.md',
+          append: true,
+          content: `# ICC Inbox
+
+When a hook surfaces an unread message notification (e.g. "You have N unread messages"), you **must**:
+1. Call \`check_messages\` (MCP tool) to read them
+2. Briefly acknowledge the messages to the user
+3. Use \`respond_to_message\` if a reply is warranted
+4. Follow message conventions: prefix with \`[TOPIC: x]\`, and set the \`status\`
+   parameter on \`send_message\`/\`respond_to_message\` (preferred) or suffix with
+   \`[STATUS: WAITING_FOR_REPLY|FYI_ONLY|ACTION_NEEDED|RESOLVED]\` in body text
+
+# ICC Activation & Mail Watcher
+
+On session start, the startup hook outputs status: "ICC: connected, N unread.
+Run /watch to activate." Do NOT auto-launch the watcher on startup. The user
+or model invokes \`/watch\` to activate.
+
+**Subagents (spawned via the Agent tool) must NOT launch or manage mail
+watchers.** Only the root conversation handles the watcher lifecycle.
+
+When the background watcher task completes, read its output and silently
+re-launch after handling:
+- If output contains \`[ICC] Mail received\`: call \`check_messages\` MCP tool, then re-launch
+- If output contains \`[ICC] Watcher cycled\`: just re-launch
+Do not announce or comment on watcher restarts to the user.
+
+If a watcher launch is denied by a hook or returns \`[ICC] Watcher already active\`,
+do nothing — another watcher is already handling this instance. Do not retry.
+
+Known limitation: \`/clear\` kills the watcher — the model loses the background
+task ID and can't receive the completion notification. Recovery is automatic:
+\`SessionStart clear\` hook re-fires startup. Run \`/watch\` again to reactivate.
+
+Cognitive pitfall: In idle sessions, watcher cycle-completion notifications can
+stack up in context without timestamps, creating an illusion of rapid cycling.
+Each cycle actually runs its full ~591s. Don't investigate "rapid cycling"
+unless wall-clock timing confirms sub-second completion.`,
+        },
+        skills: {
+          watch: {
+            target: '~/.claude/skills/watch/SKILL.md',
+            content: `---
+name: watch
+description: Activate ICC — register instance with server and launch mail watcher
+disable-model-invocation: true
+user-invocable: true
+args: [--force] [--name <alt-name>]
+---
+
+# ICC Activation (Docker)
+
+Register this instance with the ICC server and launch the mail watcher.
+This is the activation point for a session — startup only checks status,
+\`/watch\` activates.
+
+## Steps
+
+1. **Check if a watcher is already running.** Use \`TaskOutput\` with
+   \`block: false\` on any known watcher task ID, or list background
+   tasks with \`/tasks\`. If a watcher task exists and is still running,
+   tell the user it's already active and do nothing else.
+
+2. **Register with the server.** Run this using the Bash tool:
+   \`\`\`bash
+   curl -sf -X POST http://localhost:${serverPort}/api/hook/watch \\
+     -H 'Content-Type: application/json' \\
+     -d '{"instance":"'"$(basename $PWD)"'","pid":0}'
+   \`\`\`
+   Add \`,"force":true\` to the JSON if user passed \`--force\`.
+   Add \`,"name":"<alt>"\` if user passed \`--name\`.
+
+3. **Parse the response and handle:**
+   - If \`status\` is \`"deferred"\`: show the conflict to the user with options:
+     - \`/watch --force\` — evict the other session and take over
+     - \`/watch --name <alt>\` — register under a different name
+     - Cancel
+   - If \`status\` is \`"active"\`: save the session token:
+     \`\`\`bash
+     echo "SESSION_TOKEN_VALUE" > /tmp/icc-session-$PPID.token
+     \`\`\`
+     (Replace SESSION_TOKEN_VALUE with the \`sessionToken\` from the response.)
+
+4. **Launch the watcher.** Use the Bash tool with \`run_in_background: true\`
+   and \`timeout: 600000\`:
+   \`\`\`bash
+   RESULT=$(curl --max-time 591 -sf "http://localhost:${serverPort}/api/watch?instance=$(basename $PWD)&sessionToken=TOKEN"); echo "$RESULT"
+   \`\`\`
+   (Replace TOKEN with the actual session token.)
+
+5. **Confirm activation:** "ICC activated. Watching for messages."
+
+6. When the background task completes later, read its output and handle:
+   - If output contains \`"mail"\`: call \`check_messages\` MCP tool, then
+     relaunch from step 4
+   - If output contains \`"timeout"\`: relaunch from step 4`,
+          },
+          snooze: {
+            target: '~/.claude/skills/snooze/SKILL.md',
+            content: `---
+name: snooze
+description: Suppress automatic ICC mail watcher launches for this session
+disable-model-invocation: true
+user-invocable: true
+---
+
+# ICC Watcher Snooze (Docker)
+
+Suppress automatic watcher launches and deregister from the server.
+
+## Steps
+
+1. Read the session token:
+   \`\`\`bash
+   cat /tmp/icc-session-$PPID.token
+   \`\`\`
+
+2. Deregister with the server:
+   \`\`\`bash
+   curl -sf -X POST http://localhost:${serverPort}/api/hook/snooze \\
+     -H 'Content-Type: application/json' \\
+     -d '{"sessionToken":"TOKEN"}'
+   \`\`\`
+   (Replace TOKEN with the value from step 1.)
+
+3. Remove the token file:
+   \`\`\`bash
+   rm -f /tmp/icc-session-$PPID.token
+   \`\`\`
+
+4. Confirm: "ICC watcher snoozed. Use \`/wake\` to re-enable."`,
+          },
+          wake: {
+            target: '~/.claude/skills/wake/SKILL.md',
+            content: `---
+name: wake
+description: Re-enable ICC mail watcher after snoozing
+disable-model-invocation: true
+user-invocable: true
+---
+
+# ICC Watcher Wake (Docker)
+
+Re-register with the server and launch the watcher.
+
+## Steps
+
+1. **Re-register with the server:**
+   \`\`\`bash
+   curl -sf -X POST http://localhost:${serverPort}/api/hook/watch \\
+     -H 'Content-Type: application/json' \\
+     -d '{"instance":"'"$(basename $PWD)"'","pid":0,"force":true}'
+   \`\`\`
+
+2. **Save the new session token** from the response:
+   \`\`\`bash
+   echo "SESSION_TOKEN_VALUE" > /tmp/icc-session-$PPID.token
+   \`\`\`
+
+3. **Launch the watcher.** Use the Bash tool with \`run_in_background: true\`
+   and \`timeout: 600000\`:
+   \`\`\`bash
+   RESULT=$(curl --max-time 591 -sf "http://localhost:${serverPort}/api/watch?instance=$(basename $PWD)&sessionToken=TOKEN"); echo "$RESULT"
+   \`\`\`
+
+4. Confirm: "ICC watcher re-activated."`,
+          },
+        },
+        postSetup: 'Restart Claude Code for MCP changes to take effect. After restart, the SessionStart hook will confirm ICC connectivity. Run /watch to activate the mail watcher.',
+      });
       return;
     }
 

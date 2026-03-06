@@ -183,6 +183,64 @@ describe('POST /api/hook/pre-icc-message', () => {
   });
 });
 
+// ── Setup/bootstrapping endpoint ─────────────────────────────────────
+
+describe('GET /setup/claude-code', () => {
+  beforeEach(() => { isolateConfig(); reset(); });
+
+  it('returns structured setup instructions without auth', async () => {
+    await withServer({}, async (port) => {
+      const res = await httpJSON(port, 'GET', '/setup/claude-code');
+      assert.equal(res.status, 200);
+      assert.ok(res.data.instructions);
+      assert.ok(res.data.mcp);
+      assert.ok(res.data.hooks);
+      assert.ok(res.data.claudeMd);
+      assert.ok(res.data.skills);
+      assert.ok(res.data.postSetup);
+    });
+  });
+
+  it('returns valid MCP config with URL transport', async () => {
+    await withServer({}, async (port) => {
+      const res = await httpJSON(port, 'GET', '/setup/claude-code');
+      assert.equal(res.data.mcp.config.type, 'url');
+      assert.ok(res.data.mcp.config.url.includes('/mcp'));
+      assert.equal(res.data.mcp.mergeKey, 'mcpServers.icc');
+    });
+  });
+
+  it('includes all three skills', async () => {
+    await withServer({}, async (port) => {
+      const res = await httpJSON(port, 'GET', '/setup/claude-code');
+      const skills = res.data.skills;
+      assert.ok(skills.watch);
+      assert.ok(skills.snooze);
+      assert.ok(skills.wake);
+      // Skills should reference curl, not icc hook (Docker variants)
+      assert.ok(skills.watch.content.includes('curl'));
+      assert.ok(skills.snooze.content.includes('curl'));
+      assert.ok(skills.wake.content.includes('curl'));
+    });
+  });
+
+  it('hooks use dynamic instance names', async () => {
+    await withServer({}, async (port) => {
+      const res = await httpJSON(port, 'GET', '/setup/claude-code');
+      const hooksStr = JSON.stringify(res.data.hooks.config);
+      assert.ok(hooksStr.includes('$(basename $PWD)'));
+      assert.ok(!hooksStr.includes('"PROJECT"'));
+    });
+  });
+
+  it('is listed in /api/help', async () => {
+    await withServer({}, async (port) => {
+      const res = await httpJSON(port, 'GET', '/api/help');
+      assert.ok(res.data.endpoints['GET /setup/claude-code']);
+    });
+  });
+});
+
 // ── Watch long-poll endpoint ─────────────────────────────────────────
 
 describe('GET /api/watch', () => {
