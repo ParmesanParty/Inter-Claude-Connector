@@ -30,9 +30,31 @@ After setup, the container transitions to normal mode automatically (no restart 
 
 ## Claude Code Setup (Docker)
 
-With Docker, all host-side integration uses `curl` — no ICC code needed on the host.
+> **When to do this:** After the ICC container is running and initialized
+> (via the setup wizard or a pre-existing config volume). This configures
+> Claude Code on the **host machine** to talk to the containerized ICC server.
 
-### MCP Configuration
+### Recommended: Automatic Setup
+
+The ICC server provides a self-configuration endpoint. Open any Claude Code
+session and paste this prompt:
+
+> Set up ICC integration by fetching and applying the configuration from http://localhost:3179/setup/claude-code
+
+Claude Code will fetch the endpoint, which returns structured JSON with MCP
+config, hooks, CLAUDE.md content, and skill definitions (`/watch`, `/snooze`,
+`/wake`). It will write each config to the appropriate file and prompt you to
+restart.
+
+After restarting, the SessionStart hook will confirm connectivity:
+`ICC: connected, N unread. Run /watch to activate.`
+
+### Manual Setup (Reference)
+
+If you prefer to configure manually, the sections below show the raw configs.
+You can also fetch them as JSON: `curl http://localhost:3179/setup/claude-code`
+
+#### MCP Configuration
 
 Add to `~/.claude.json`:
 
@@ -47,7 +69,7 @@ Add to `~/.claude.json`:
 }
 ```
 
-### Hook Configuration
+#### Hook Configuration
 
 Add to `~/.claude/settings.json` under `"hooks"`:
 
@@ -59,7 +81,28 @@ Add to `~/.claude/settings.json` under `"hooks"`:
         "matcher": "startup",
         "hooks": [{
           "type": "command",
-          "command": "curl -sf -X POST http://localhost:3179/api/hook/startup -H 'Content-Type: application/json' -d '{\"instance\":\"PROJECT\"}'"
+          "command": "curl -sf -X POST http://localhost:3179/api/hook/startup -H 'Content-Type: application/json' -d '{\"instance\":\"'\"$(basename $PWD)\"'\"}'"
+        }]
+      },
+      {
+        "matcher": "resume",
+        "hooks": [{
+          "type": "command",
+          "command": "curl -sf -X POST http://localhost:3179/api/hook/startup -H 'Content-Type: application/json' -d '{\"instance\":\"'\"$(basename $PWD)\"'\"}'"
+        }]
+      },
+      {
+        "matcher": "compact",
+        "hooks": [{
+          "type": "command",
+          "command": "ST=$(cat /tmp/icc-session-$PPID.token 2>/dev/null); [ -n \"$ST\" ] && curl -sf -X POST http://localhost:3179/api/hook/heartbeat -H 'Content-Type: application/json' -d \"{\\\"sessionToken\\\":\\\"$ST\\\"}\" || true"
+        }]
+      },
+      {
+        "matcher": "clear",
+        "hooks": [{
+          "type": "command",
+          "command": "curl -sf -X POST http://localhost:3179/api/hook/startup -H 'Content-Type: application/json' -d '{\"instance\":\"'\"$(basename $PWD)\"'\"}'"
         }]
       }
     ],
@@ -99,30 +142,27 @@ Add to `~/.claude/settings.json` under `"hooks"`:
 }
 ```
 
-Replace `PROJECT` with your project's instance name (e.g. the basename of your working directory).
+Instance names are resolved dynamically via `$(basename $PWD)` — no manual
+replacement needed.
 
-### Mail Watcher (Docker)
+#### Skills
 
-ICC uses a `/watch` activation model. The startup hook only reports status — activation
-happens when the model runs `/watch`, which:
+Write the following skill files to enable `/watch`, `/snooze`, and `/wake`
+commands. The `/setup/claude-code` endpoint serves the full content of each
+skill — fetch it with `curl http://localhost:3179/setup/claude-code` and
+extract the `skills` section, or let Claude Code do it automatically via the
+recommended setup above.
 
-1. **Registers** with the server via `POST /api/hook/watch`:
-   ```bash
-   curl -sf -X POST http://localhost:3179/api/hook/watch \
-     -H 'Content-Type: application/json' \
-     -d '{"instance":"PROJECT","pid":0}'
-   ```
-   The response contains `{ "status": "active", "sessionToken": "..." }`.
-   Save the token: `echo "$TOKEN" > /tmp/icc-session-$PPID.token`
+Skill targets:
+- `~/.claude/skills/watch/SKILL.md`
+- `~/.claude/skills/snooze/SKILL.md`
+- `~/.claude/skills/wake/SKILL.md`
 
-2. **Launches the watcher** via the long-poll endpoint:
-   ```bash
-   curl --max-time 591 -sf "http://localhost:3179/api/watch?instance=PROJECT&sessionToken=TOKEN"
-   ```
-   This blocks until a message arrives (`{"event":"mail"}`) or times out
-   (`{"event":"timeout"}`), then the model relaunches it.
+#### CLAUDE.md
 
-The `/watch` skill handles this flow automatically — see `~/.claude/skills/watch/SKILL.md`.
+Append ICC inbox and watcher instructions to `~/.claude/CLAUDE.md`. The full
+content is available in the `/setup/claude-code` endpoint response under the
+`claudeMd` key, or in [`docs/claude-code-setup.md` § 3](claude-code-setup.md#3-claudemd-claudeclaudemd).
 
 ## Environment Variables
 
