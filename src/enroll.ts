@@ -22,6 +22,7 @@ interface EnrollmentOptions {
 interface EnrollmentEntry {
   identity: string;
   challenge: string;
+  caAddress: string | null;
   expiresAt: number;
 }
 
@@ -157,6 +158,7 @@ export function createEnrollmentServer(options: EnrollmentOptions): EnrollmentSe
         enrollments.set(enrollmentId, {
           identity,
           challenge,
+          caAddress: null,
           expiresAt: Date.now() + challengeTTL,
         });
 
@@ -270,7 +272,7 @@ export function createEnrollmentServer(options: EnrollmentOptions): EnrollmentSe
     if (method === 'POST' && url === '/enroll/join') {
       try {
         const body = JSON.parse(await readBody(req));
-        const { identity, joinToken, httpUrl } = body;
+        const { identity, joinToken, httpUrl, caAddress } = body;
 
         if (!identity || !joinToken) {
           sendJSON(res, 400, { error: 'Missing identity or joinToken' });
@@ -304,6 +306,7 @@ export function createEnrollmentServer(options: EnrollmentOptions): EnrollmentSe
         enrollments.set(enrollmentId, {
           identity,
           challenge,
+          caAddress: caAddress || null,
           expiresAt: Date.now() + challengeTTL,
         });
 
@@ -386,6 +389,26 @@ export function createEnrollmentServer(options: EnrollmentOptions): EnrollmentSe
             },
             outboundToken: tokenForNewHost,
           });
+        }
+
+        // Include CA itself as a peer for the joining host
+        if (entry.caAddress && config.server.port) {
+          const caOutbound = randomBytes(32).toString('hex');  // CA → new host
+          const caInbound = randomBytes(32).toString('hex');    // new host → CA
+
+          peers.push({
+            identity: config.identity,
+            httpsUrl: `https://${entry.caAddress}:${config.server.port}`,
+            outboundToken: caInbound,   // new host uses this to talk TO CA
+            inboundToken: caOutbound,   // new host accepts this FROM CA
+          });
+
+          // Update CA's own config for this peer
+          if (!config.server.peerTokens) config.server.peerTokens = {};
+          config.server.peerTokens[entry.identity] = caInbound;  // accept from new host
+          if (config.remotes[entry.identity]) {
+            config.remotes[entry.identity]!.token = caOutbound;   // send to new host
+          }
         }
 
         // Update CA config: set new peer's URL to https

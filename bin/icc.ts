@@ -418,22 +418,6 @@ function deleteHeartbeat(instanceName: string): void {
   } catch { /* non-fatal — file may not exist */ }
 }
 
-function isHeartbeatFresh(instanceName: string): boolean {
-  const path = heartbeatPath(instanceName);
-  try {
-    if (!existsSync(path)) return false;
-    const timestamp = readFileSync(path, 'utf-8').trim();
-    const age = Date.now() - new Date(timestamp).getTime();
-    if (age > 30000) {
-      // Stale — clean up
-      try { unlinkSync(path); } catch { /* ignore */ }
-      return false;
-    }
-    return true;
-  } catch {
-    return false;
-  }
-}
 
 function watcherPidPath(instanceName: string): string {
   return join(homedir(), '.icc', `watcher.${instanceName}.pid`);
@@ -472,9 +456,6 @@ function snoozePath(instanceName: string): string {
   return join(homedir(), '.icc', `watcher.${instanceName}.snoozed`);
 }
 
-function isWatcherSnoozed(instanceName: string): boolean {
-  return existsSync(snoozePath(instanceName));
-}
 
 function snoozeWatcher(instanceName: string): void {
   try { writeFileSync(snoozePath(instanceName), new Date().toISOString()); } catch {}
@@ -1362,10 +1343,12 @@ async function joinMesh(): Promise<void> {
     console.error('--ip is required (this host\'s address, reachable by the CA)');
     process.exit(1);
   }
+  const caHostname = new URL(caUrl).hostname;
   const joinRes = await httpJSON(`${caUrl}/enroll/join`, 'POST', {
     identity,
     joinToken,
     httpUrl: `http://${ownIp}:${ownPort}`,
+    caAddress: caHostname,
   });
 
   if (!joinRes.enrollmentId) {
@@ -1404,15 +1387,40 @@ async function joinMesh(): Promise<void> {
     caPath: join(tlsDir, 'ca.crt'),
   };
 
-  // Configure all peers from CA response
+  // Configure all peers from CA response (with reachability check)
+  const { tcpReachable } = await import('../src/util/net.ts');
+
   if (!config.remotes) config.remotes = {};
   if (!config.server.peerTokens) config.server.peerTokens = {};
+  const configuredPeers: string[] = [];
+  const skippedPeers: string[] = [];
+
   for (const peer of result.peers || []) {
-    config.remotes[peer.identity] = {
-      httpUrl: peer.httpsUrl,
-      token: peer.outboundToken,
-    };
-    config.server.peerTokens[peer.identity] = peer.inboundToken;
+    // CA is always reachable — we just completed the handshake
+    if (peer.identity === caIdentity) {
+      config.remotes[peer.identity] = {
+        httpUrl: peer.httpsUrl,
+        token: peer.outboundToken,
+      };
+      config.server.peerTokens[peer.identity] = peer.inboundToken;
+      configuredPeers.push(peer.identity);
+      continue;
+    }
+
+    // TCP probe non-CA peers
+    const peerUrl = new URL(peer.httpsUrl);
+    const reachable = await tcpReachable(peerUrl.hostname, parseInt(peerUrl.port, 10));
+    if (reachable) {
+      config.remotes[peer.identity] = {
+        httpUrl: peer.httpsUrl,
+        token: peer.outboundToken,
+      };
+      config.server.peerTokens[peer.identity] = peer.inboundToken;
+      configuredPeers.push(peer.identity);
+    } else {
+      console.log(`  Warning: Peer "${peer.identity}" at ${peer.httpsUrl} is not reachable — skipping`);
+      skippedPeers.push(peer.identity);
+    }
   }
 
   // Set CA identity
@@ -1422,7 +1430,10 @@ async function joinMesh(): Promise<void> {
 
   console.log('Join complete!');
   console.log('  TLS: enabled');
-  console.log(`  Peers configured: ${(result.peers || []).map((p: { identity: string }) => p.identity).join(', ') || 'none'}`);
+  console.log(`  Peers configured: ${configuredPeers.join(', ') || 'none'}`);
+  if (skippedPeers.length > 0) {
+    console.log(`  Peers skipped (unreachable): ${skippedPeers.join(', ')}`);
+  }
   console.log('\nRestart your ICC server: systemctl --user restart icc-server');
 }
 
