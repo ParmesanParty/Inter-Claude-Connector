@@ -156,7 +156,7 @@ export async function startSetupWizard(options: WizardOptions): Promise<void> {
         const body = JSON.parse(await readBody(req));
         const { identity, caHost, caPort, joinToken, caIdentity, ownIp } = body;
 
-        if (!identity || !caHost || !joinToken || !caIdentity) {
+        if (!identity || !caHost || caHost === '0.0.0.0' || !joinToken || !caIdentity) {
           sendJSON(res, 400, { error: 'Missing required fields: identity, caHost, joinToken, caIdentity' }, corsHeaders);
           return;
         }
@@ -520,16 +520,10 @@ function parseSetupString(raw) {
 function onSetupStringInput() {
   const raw = document.getElementById('join-setup-string').value;
   const parsed = parseSetupString(raw);
-  if (parsed && !parsed.caHost) {
-    document.getElementById('join-ca-host-row').classList.remove('hidden');
-  } else {
-    document.getElementById('join-ca-host-row').classList.add('hidden');
-  }
-  if (parsed && !parsed.host) {
-    document.getElementById('join-own-host-row').classList.remove('hidden');
-  } else {
-    document.getElementById('join-own-host-row').classList.add('hidden');
-  }
+  const needsCaHost = parsed && (!parsed.caHost || parsed.caHost === '0.0.0.0');
+  const needsOwnHost = parsed && !parsed.host;
+  document.getElementById('join-ca-host-row').classList.toggle('hidden', !needsCaHost);
+  document.getElementById('join-own-host-row').classList.toggle('hidden', !needsOwnHost);
 }
 
 async function joinMesh() {
@@ -542,7 +536,7 @@ async function joinMesh() {
   if (parsed) {
     // Setup string path
     caIdentity = parsed.caIdentity;
-    caHost = parsed.caHost || document.getElementById('join-ca-host-from-setup').value.trim();
+    caHost = (parsed.caHost && parsed.caHost !== '0.0.0.0') ? parsed.caHost : document.getElementById('join-ca-host-from-setup').value.trim();
     caPort = parsed.caPort || 4179;
     joinToken = parsed.joinToken;
     ownHost = parsed.host || document.getElementById('join-own-host').value.trim();
