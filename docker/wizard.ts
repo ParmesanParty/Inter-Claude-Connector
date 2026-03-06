@@ -156,7 +156,7 @@ export async function startSetupWizard(options: WizardOptions): Promise<void> {
         const body = JSON.parse(await readBody(req));
         const { identity, caHost, caPort, joinToken, caIdentity, ownIp } = body;
 
-        if (!identity || !caHost || caHost === '0.0.0.0' || !joinToken || !caIdentity) {
+        if (!identity || !caHost || !joinToken || !caIdentity) {
           sendJSON(res, 400, { error: 'Missing required fields: identity, caHost, joinToken, caIdentity' }, corsHeaders);
           return;
         }
@@ -183,7 +183,11 @@ export async function startSetupWizard(options: WizardOptions): Promise<void> {
         const enrollPort = caPort || 4179;
         const caUrl = `http://${caHost}:${enrollPort}`;
         const ownPort = config.server.port;
-        const httpUrl = ownIp ? `http://${ownIp}:${ownPort}` : `http://0.0.0.0:${ownPort}`;
+        if (!ownIp) {
+          sendJSON(res, 400, { error: "This host's address is required so the CA can reach back for verification" }, corsHeaders);
+          return;
+        }
+        const httpUrl = `http://${ownIp}:${ownPort}`;
 
         const joinRes = await httpJSON(`${caUrl}/enroll/join`, 'POST', {
           identity,
@@ -520,10 +524,9 @@ function parseSetupString(raw) {
 function onSetupStringInput() {
   const raw = document.getElementById('join-setup-string').value;
   const parsed = parseSetupString(raw);
-  const needsCaHost = parsed && (!parsed.caHost || parsed.caHost === '0.0.0.0');
-  const needsOwnHost = parsed && !parsed.host;
+  const needsCaHost = parsed && !parsed.caHost;
   document.getElementById('join-ca-host-row').classList.toggle('hidden', !needsCaHost);
-  document.getElementById('join-own-host-row').classList.toggle('hidden', !needsOwnHost);
+  document.getElementById('join-own-host-row').classList.toggle('hidden', !(parsed && !parsed.host));
 }
 
 async function joinMesh() {
@@ -536,7 +539,7 @@ async function joinMesh() {
   if (parsed) {
     // Setup string path
     caIdentity = parsed.caIdentity;
-    caHost = (parsed.caHost && parsed.caHost !== '0.0.0.0') ? parsed.caHost : document.getElementById('join-ca-host-from-setup').value.trim();
+    caHost = parsed.caHost || document.getElementById('join-ca-host-from-setup').value.trim();
     caPort = parsed.caPort || 4179;
     joinToken = parsed.joinToken;
     ownHost = parsed.host || document.getElementById('join-own-host').value.trim();
@@ -552,8 +555,9 @@ async function joinMesh() {
     return;
   }
 
-  if (!identity || !caIdentity || !caHost || !joinToken) {
-    showError('join-error', parsed ? 'Invalid setup string — missing required fields' : 'All fields except port and address are required');
+  if (!identity || !caIdentity || !caHost || !joinToken || !ownHost) {
+    const missing = !ownHost ? "This host's address is required" : 'All fields except port are required';
+    showError('join-error', parsed ? missing : 'All fields except port are required');
     return;
   }
 

@@ -1273,7 +1273,7 @@ async function invite(): Promise<void> {
   // 6. Register join token with enrollment server
   try {
     await httpJSON(`http://127.0.0.1:${enrollPort}/enroll/register-invite`, 'POST', {
-      identity, joinToken, ip: host || '0.0.0.0', port: peerPort,
+      identity, joinToken, ip: host, port: peerPort,
     }, localToken);
     console.log('Join token registered with enrollment server');
   } catch {
@@ -1355,7 +1355,11 @@ async function joinMesh(): Promise<void> {
 
   // Phase 2: Authenticate with join token
   console.log(`Joining mesh via CA at ${caUrl}...`);
-  const ownIp = flags.ip as string || '0.0.0.0';
+  const ownIp = flags.ip as string;
+  if (!ownIp) {
+    console.error('--ip is required (this host\'s address, reachable by the CA)');
+    process.exit(1);
+  }
   const joinRes = await httpJSON(`${caUrl}/enroll/join`, 'POST', {
     identity,
     joinToken,
