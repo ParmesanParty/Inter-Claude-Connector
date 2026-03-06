@@ -357,9 +357,9 @@ Continue to [Configure Claude Code](#configure-claude-code).
 
 ## Configure Claude Code
 
-Three files need to be set up: MCP server config (`~/.claude.json`),
-lifecycle hooks (`~/.claude/settings.json`), and watcher instructions
-(`~/.claude/CLAUDE.md`).
+Four things need to be set up: MCP server config (`~/.claude.json`),
+lifecycle hooks (`~/.claude/settings.json`), watcher instructions
+(`~/.claude/CLAUDE.md`), and skills (`~/.claude/skills/`).
 
 The easiest way is to let Claude Code configure itself. Open a Claude
 Code session in `~/code/inter-claude-connector` and prompt:
@@ -368,7 +368,8 @@ Code session in `~/code/inter-claude-connector` and prompt:
 > host.
 
 Claude Code will read the reference file, resolve local paths (node
-binary, home directory), and write all three config files.
+binary, home directory), and write all config files and skill
+definitions.
 
 See [`docs/claude-code-setup.md`](claude-code-setup.md) for the full
 configuration reference if you prefer to set up manually.
@@ -413,6 +414,7 @@ after pulling. No need to re-link.
 | MCP server config | `~/.claude.json` → `mcpServers` | **NOT** `.mcp.json` |
 | Lifecycle hooks | `~/.claude/settings.json` → `hooks` | |
 | Watcher instructions | `~/.claude/CLAUDE.md` | Global instructions for Claude Code |
+| Skills | `~/.claude/skills/{watch,snooze,wake}/SKILL.md` | `/watch`, `/snooze`, `/wake` commands |
 | systemd service | `~/.config/systemd/user/icc-server.service` | |
 | Project code | `~/code/inter-claude-connector/` | Lowercase `code/` on all hosts |
 
