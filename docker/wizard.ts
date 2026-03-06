@@ -385,7 +385,7 @@ function getWizardHTML(): string {
     </div>
   </div>
 
-  <div id="success-screen" class="card hidden" style="max-width: 500px; margin: 0 auto;">
+  <div id="success-screen" class="card hidden" style="max-width: 600px; margin: 0 auto;">
     <h2>Setup Complete!</h2>
     <p class="success">ICC is configured and starting up.</p>
     <div class="result-box">
@@ -399,9 +399,37 @@ function getWizardHTML(): string {
       </div>
     </div>
     <p style="margin-top: 1rem; color: #71767b; font-size: 0.85rem;">
-      Save the local token &mdash; you'll need it for Claude Code MCP configuration.
-      The server will be available shortly at this address.
+      Save the local token &mdash; you'll need it for web UI login and direct API access.
     </p>
+    <div style="margin-top: 1.25rem; padding: 1rem 1.25rem; background: #1a2634; border: 1px solid #1d9bf0; border-radius: 8px;">
+      <p style="color: #1d9bf0; font-size: 0.95rem; font-weight: 600; margin-bottom: 0.5rem;">Next: Connect Claude Code</p>
+      <p style="color: #8b98a5; font-size: 0.85rem; line-height: 1.5; margin-bottom: 0.75rem;">
+        Open any Claude Code session and paste this prompt:
+      </p>
+      <div style="background: #0f1419; border: 1px solid #2f3336; border-radius: 6px; padding: 0.75rem 1rem; font-family: monospace; font-size: 0.85rem; color: #e7e9ea; cursor: pointer; position: relative;" onclick="navigator.clipboard.writeText(this.innerText.replace('Copied!','').trim())" title="Click to copy">
+        Set up ICC integration by fetching and applying the configuration from http://localhost:3179/setup/claude-code
+      </div>
+      <p style="color: #71767b; font-size: 0.8rem; margin-top: 0.5rem;">
+        This configures MCP, hooks, skills, and CLAUDE.md automatically.
+        Claude Code will ask you to restart afterward.
+      </p>
+    </div>
+    <details style="margin-top: 1rem;">
+      <summary style="color: #71767b; font-size: 0.85rem; cursor: pointer;">Manual setup (advanced)</summary>
+      <div style="margin-top: 0.75rem;">
+        <p style="color: #8b98a5; font-size: 0.85rem; margin-bottom: 0.5rem;">
+          If you prefer to configure manually, fetch the setup JSON:
+        </p>
+        <div style="background: #0f1419; border: 1px solid #2f3336; border-radius: 6px; padding: 0.75rem 1rem; font-family: monospace; font-size: 0.85rem; color: #e7e9ea;">
+          curl http://localhost:3179/setup/claude-code
+        </div>
+        <p style="color: #8b98a5; font-size: 0.85rem; margin-top: 0.5rem;">
+          Then apply each section to the target file listed in the response.
+          See <a href="https://github.com/ParmesanParty/Inter-Claude-Connector/blob/main/docs/docker.md#claude-code-setup-docker"
+          style="color: #1d9bf0; text-decoration: none;">the full docs</a> for details.
+        </p>
+      </div>
+    </details>
   </div>
 </div>
 
