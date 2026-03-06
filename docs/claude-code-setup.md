@@ -229,15 +229,108 @@ Each cycle actually runs its full ~591s. Don't investigate "rapid cycling"
 unless wall-clock timing confirms sub-second completion.
 ```
 
+## 4. Skills (`~/.claude/skills/`)
+
+Skills give Claude Code the `/watch`, `/snooze`, and `/wake` slash commands
+for managing the ICC mail watcher. Create the directory structure and write
+each file.
+
+### `/watch` — activate the mail watcher
+
+Write to `~/.claude/skills/watch/SKILL.md`:
+
+```markdown
+---
+name: watch
+description: Activate ICC — register instance with server and launch mail watcher
+disable-model-invocation: true
+user-invocable: true
+args: [--force] [--name <alt-name>]
+---
+
+# ICC Activation
+
+Register this instance with the ICC server and launch the mail watcher. This is the activation point for a session — startup only checks status, `/watch` activates.
+
+## Steps
+
+1. **Check if a watcher is already running.** Use `TaskOutput` with `block: false` on any known watcher task ID, or list background tasks with `/tasks`. If a watcher task exists and is still running, tell the user it's already active and do nothing else.
+
+2. **If no watcher is running**, launch one:
+   - Use the `Bash` tool with `run_in_background: true`
+   - Command: `icc hook watch` (add `--force` if user passed `--force`, add `--name <name>` if user passed `--name`)
+   - Timeout: `600000`
+
+3. **Check the immediate output.** The watch hook registers with the server before starting:
+   - If output contains `[ICC] Registration deferred:` — show the conflict to the user with options:
+     - `/watch --force` — evict the other session and take over
+     - `/watch --name <alt>` — register under a different name
+     - Cancel — don't activate
+   - If output contains `[ICC] Watcher already active` — tell the user it's already running
+   - Otherwise — confirm activation: "ICC activated as <instance>. Watching for messages."
+
+4. When the background task completes later, read its output and handle:
+   - If output contains `[ICC] Mail received`: call `check_messages` MCP tool, then relaunch
+   - If output contains `[ICC] Watcher cycled`: just relaunch
+```
+
+### `/snooze` — suppress watcher auto-launches
+
+Write to `~/.claude/skills/snooze/SKILL.md`:
+
+```markdown
+---
+name: snooze
+description: Suppress automatic ICC mail watcher launches for this session. Use when watcher restarts are unwanted.
+disable-model-invocation: true
+user-invocable: true
+---
+
+# ICC Watcher Snooze
+
+Suppress automatic watcher launches and deregister from the server for the current session.
+
+## Steps
+
+1. Run `icc hook snooze-watcher` using the `Bash` tool. This deregisters the session token with the server and sets the local snooze flag.
+2. Confirm to the user that watcher auto-launch is snoozed and the instance is deregistered.
+3. Tell them they can use `/wake` to re-enable it.
+```
+
+### `/wake` — re-enable after snooze
+
+Write to `~/.claude/skills/wake/SKILL.md`:
+
+```markdown
+---
+name: wake
+description: Re-enable automatic ICC mail watcher launches after snoozing. Use when ready to resume watcher.
+disable-model-invocation: true
+user-invocable: true
+---
+
+# ICC Watcher Wake
+
+Remove the snooze flag, re-register with the server, and immediately launch the watcher.
+
+## Steps
+
+1. Run `icc hook wake-watcher` using the `Bash` tool. This removes the snooze flag, re-registers with the server, and writes a new session token.
+2. Launch the watcher: use the `Bash` tool with `run_in_background: true`, command `icc hook watch`, timeout `600000`.
+3. Confirm to the user that the watcher is back online.
+```
+
 ## Verification
 
-After completing all three steps, restart Claude Code and verify:
+After completing all four steps, restart Claude Code and verify:
 
 1. **MCP server:** Run `/mcp` inside a Claude Code session. The `icc`
    server should appear with its 8 tools listed.
 2. **Hooks:** The session should display "ICC: connected, N unread. Run
    /watch to activate." on startup, confirming the SessionStart hook fired.
 3. **Connectivity:** Use the `ping_remote` MCP tool to ping a peer.
+4. **Skills:** Run `/watch` inside a Claude Code session. It should register
+   with the server and start the mail watcher.
 
 ---
 
