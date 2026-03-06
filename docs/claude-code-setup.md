@@ -244,3 +244,15 @@ After completing all three steps, restart Claude Code and verify:
 2. **Hooks:** The session should display `[ICC] Start mail watcher` on
    startup, confirming the SessionStart hook fired.
 3. **Connectivity:** Use the `ping_remote` MCP tool to ping a peer.
+
+---
+
+## Docker Deployment (Alternative)
+
+If ICC runs in Docker instead of bare-metal, the setup is simpler — all
+host-side integration uses `curl` instead of the `icc` CLI.
+
+See `docs/docker.md` for full Docker setup instructions including:
+- MCP config using URL transport (`"type": "url"`)
+- Hook config using `curl` commands
+- Mail watcher via long-poll endpoint
