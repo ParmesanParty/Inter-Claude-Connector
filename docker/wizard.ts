@@ -193,6 +193,7 @@ export async function startSetupWizard(options: WizardOptions): Promise<void> {
           identity,
           joinToken,
           httpUrl,
+          caAddress: caHost,
         });
 
         if (!joinRes.enrollmentId) {
