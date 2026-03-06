@@ -364,22 +364,54 @@ function getWizardHTML(): string {
       <div id="ca-loading" class="hidden"><span class="spinner"></span> Initializing...</div>
     </div>
 
-    <div class="card">
+    <div class="card" id="join-card">
       <h2>Join Existing Mesh</h2>
-      <p>Join a mesh managed by another host. You need the CA host address and a join token.</p>
-      <label for="join-identity">This Host's Identity</label>
-      <input type="text" id="join-identity" placeholder="e.g. laptop, rpi0">
-      <label for="join-ca-identity">CA Host Identity</label>
-      <input type="text" id="join-ca-identity" placeholder="e.g. server">
-      <label for="join-ca-host">CA Host Address</label>
-      <input type="text" id="join-ca-host" placeholder="e.g. 192.168.1.100">
-      <label for="join-ca-port">CA Enrollment Port</label>
-      <input type="text" id="join-ca-port" value="4179">
-      <label for="join-token">Join Token</label>
-      <input type="text" id="join-token" placeholder="Token from 'icc invite'">
-      <label for="join-own-ip">This Host's IP (reachable by CA)</label>
-      <input type="text" id="join-own-ip" placeholder="e.g. 192.168.1.101">
-      <button id="btn-join" onclick="joinMesh()">Join Mesh</button>
+      <p>Join a mesh managed by another host.</p>
+
+      <div id="join-step1">
+        <label for="join-identity">This Host's Identity</label>
+        <input type="text" id="join-identity" placeholder="e.g. laptop, rpi0">
+        <button id="btn-join-next" onclick="joinStep1()">Next</button>
+      </div>
+
+      <div id="join-step2" class="hidden">
+        <div style="margin-bottom: 0.75rem;">
+          <span style="color: #8b98a5; font-size: 0.85rem;">Identity:</span>
+          <span id="join-identity-display" style="font-weight: 600;"></span>
+        </div>
+
+        <p style="color: #8b98a5; font-size: 0.85rem; margin-bottom: 0.25rem;">
+          Run this on the CA host:
+        </p>
+        <div id="join-invite-cmd" style="background: #0f1419; border: 1px solid #2f3336; border-radius: 6px; padding: 0.75rem 1rem; font-family: monospace; font-size: 0.85rem; color: #e7e9ea; cursor: pointer; margin-bottom: 1rem;" onclick="navigator.clipboard.writeText(this.innerText.trim())" title="Click to copy"></div>
+
+        <label for="join-setup-string">Paste the setup string from <code style="color: #e7e9ea;">icc invite</code></label>
+        <input type="text" id="join-setup-string" placeholder="icc:eyJ..." oninput="onSetupStringInput()">
+
+        <div id="join-own-host-row" class="hidden">
+          <label for="join-own-host">This Host's Address (IP or hostname, reachable by CA)</label>
+          <input type="text" id="join-own-host" placeholder="e.g. 192.168.1.101 or myhost.local">
+        </div>
+
+        <button id="btn-join" onclick="joinMesh()">Join Mesh</button>
+
+        <details style="margin-top: 0.75rem;">
+          <summary style="color: #71767b; font-size: 0.85rem; cursor: pointer;">Manual configuration (advanced)</summary>
+          <div style="margin-top: 0.5rem;">
+            <label for="join-ca-identity">CA Host Identity</label>
+            <input type="text" id="join-ca-identity" placeholder="e.g. server">
+            <label for="join-ca-host">CA Host Address</label>
+            <input type="text" id="join-ca-host" placeholder="e.g. 192.168.1.100 or server.local">
+            <label for="join-ca-port">CA Enrollment Port</label>
+            <input type="text" id="join-ca-port" value="4179">
+            <label for="join-token">Join Token</label>
+            <input type="text" id="join-token" placeholder="Token from icc invite">
+            <label for="join-manual-own-host">This Host's Address</label>
+            <input type="text" id="join-manual-own-host" placeholder="e.g. 192.168.1.101 or myhost.local">
+          </div>
+        </details>
+      </div>
+
       <div id="join-error" class="error hidden"></div>
       <div id="join-loading" class="hidden"><span class="spinner"></span> Joining mesh...</div>
     </div>
@@ -456,16 +488,68 @@ async function initCA() {
   }
 }
 
+function joinStep1() {
+  const identity = document.getElementById('join-identity').value.trim();
+  if (!identity) { showError('join-error', 'Identity is required'); return; }
+  hideError('join-error');
+
+  document.getElementById('join-identity-display').textContent = identity;
+  document.getElementById('join-invite-cmd').textContent = 'icc invite ' + identity;
+  document.getElementById('join-step1').classList.add('hidden');
+  document.getElementById('join-step2').classList.remove('hidden');
+}
+
+function parseSetupString(raw) {
+  const str = raw.trim();
+  if (!str.startsWith('icc:')) return null;
+  try {
+    // base64url → base64 → decode
+    const b64 = str.slice(4).replace(/-/g, '+').replace(/_/g, '/');
+    const json = atob(b64);
+    const data = JSON.parse(json);
+    if (!data.caIdentity || !data.joinToken) return null;
+    return data;
+  } catch { return null; }
+}
+
+function onSetupStringInput() {
+  const raw = document.getElementById('join-setup-string').value;
+  const parsed = parseSetupString(raw);
+  if (parsed && !parsed.host) {
+    document.getElementById('join-own-host-row').classList.remove('hidden');
+  } else {
+    document.getElementById('join-own-host-row').classList.add('hidden');
+  }
+}
+
 async function joinMesh() {
   const identity = document.getElementById('join-identity').value.trim();
-  const caIdentity = document.getElementById('join-ca-identity').value.trim();
-  const caHost = document.getElementById('join-ca-host').value.trim();
-  const caPort = document.getElementById('join-ca-port').value.trim();
-  const joinToken = document.getElementById('join-token').value.trim();
-  const ownIp = document.getElementById('join-own-ip').value.trim();
+  const setupRaw = document.getElementById('join-setup-string').value.trim();
+
+  let caIdentity, caHost, caPort, joinToken, ownHost;
+
+  const parsed = parseSetupString(setupRaw);
+  if (parsed) {
+    // Setup string path
+    caIdentity = parsed.caIdentity;
+    caHost = parsed.caHost;
+    caPort = parsed.caPort || 4179;
+    joinToken = parsed.joinToken;
+    ownHost = parsed.host || document.getElementById('join-own-host').value.trim();
+  } else if (setupRaw === '') {
+    // Manual path — read from manual fields
+    caIdentity = document.getElementById('join-ca-identity').value.trim();
+    caHost = document.getElementById('join-ca-host').value.trim();
+    caPort = parseInt(document.getElementById('join-ca-port').value.trim()) || 4179;
+    joinToken = document.getElementById('join-token').value.trim();
+    ownHost = document.getElementById('join-manual-own-host').value.trim();
+  } else {
+    showError('join-error', 'Invalid setup string. It should start with "icc:" — check that you copied the full string.');
+    return;
+  }
 
   if (!identity || !caIdentity || !caHost || !joinToken) {
-    showError('join-error', 'All fields except port and IP are required');
+    showError('join-error', parsed ? 'Invalid setup string — missing required fields' : 'All fields except port and address are required');
     return;
   }
 
@@ -476,7 +560,7 @@ async function joinMesh() {
     const res = await fetch('/setup/join', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ identity, caHost, caPort: parseInt(caPort) || 4179, joinToken, caIdentity, ownIp }),
+      body: JSON.stringify({ identity, caHost, caPort, joinToken, caIdentity, ownIp: ownHost }),
     });
     const data = await res.json();
     if (!res.ok || !data.ok) throw new Error(data.error || 'Join failed');
