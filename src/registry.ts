@@ -248,6 +248,8 @@ export function sessionSnooze(sessionToken: string): boolean {
   reg.state = 'UNREGISTERED';
   reg.snoozed = true;
   sessions.delete(name);
+  // Also remove from PID-based registry so instance disappears from list_instances
+  instances.delete(name);
   log.info(`Session snoozed "${name}"`);
   return true;
 }

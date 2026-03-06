@@ -834,7 +834,7 @@ git commit -m "test: refactor cors, mesh-update, web-auth tests to use shared he
 
 In both files:
 - Delete the local `runHook` definition
-- Delete all ~5 copies of the `beforeEach/afterEach` tmpHome pair
+- Delete all ~12 copies of the `beforeEach/afterEach` tmpHome pair
 - Import from helpers:
 
 ```typescript
@@ -871,7 +871,7 @@ Keep the `sanitize` and `spawn` imports — those are specific to these tests.
 **Step 2: Run tests**
 
 Run: `node --test test/hook-heartbeat.test.ts test/hook-session.test.ts`
-Expected: 11 + 8 = 19 tests pass
+Expected: 17 + 8 = 25 tests pass
 
 **Step 3: Commit**
 
@@ -933,7 +933,7 @@ git commit -m "test: use shared httpJSON and withEnv in enroll and tls tests"
 **Step 1: Run full test suite**
 
 Run: `node --test test/*.test.ts`
-Expected: 373 tests, 0 failures
+Expected: 380 tests, 0 failures
 
 **Step 2: Acid test — verify config isolation**
 
@@ -946,7 +946,7 @@ node --test test/*.test.ts
 mv ~/.icc/config.json.bak ~/.icc/config.json
 ```
 
-Expected: 373 tests, 0 failures (no live config dependency)
+Expected: 380 tests, 0 failures (no live config dependency)
 
 **Step 3: Remove any remaining `ICC_AUTH_TOKEN` references**
 
@@ -974,7 +974,7 @@ Update the Testing section:
 
 ```markdown
 ## Testing
-- `node --test test/*.test.ts` — 373 tests, all passing
+- `node --test test/*.test.ts` — 380 tests, all passing
 - `test/helpers.ts` — shared utilities: `createTestEnv`, `isolateConfig`, `withServer`, `httpJSON`, `httpRaw`, `withEnv`, `runHook`, `createTmpHome`
 - `isolateConfig()` always zeros remotes, TLS, and tokens — prevents live config leakage
 - `withServer(opts, fn)` — guaranteed server cleanup, replaces all try/finally patterns

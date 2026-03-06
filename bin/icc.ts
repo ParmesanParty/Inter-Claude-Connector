@@ -863,6 +863,18 @@ async function hook() {
     }
 
     case 'snooze-watcher': {
+      // Kill local watcher process if alive
+      const snoozePidPath = watcherPidPath(instanceName);
+      try {
+        if (existsSync(snoozePidPath)) {
+          const pid = parseInt(readFileSync(snoozePidPath, 'utf-8').trim(), 10);
+          if (!isNaN(pid)) {
+            process.kill(pid, 'SIGTERM');
+          }
+        }
+      } catch { /* non-fatal — watcher may already be gone */ }
+      deleteWatcherPid(instanceName);
+      deleteHeartbeat(instanceName);
       // Deregister session with server if active
       const snoozeToken = getSessionToken();
       if (snoozeToken) {

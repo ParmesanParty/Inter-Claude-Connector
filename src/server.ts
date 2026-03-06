@@ -747,6 +747,14 @@ export function createICCServer(options: ICCServerOptions = {}): ICCServer {
           return;
         }
         const ok = sessionSnooze(sessionToken);
+        // Terminate active long-poll watcher connection if present.
+        // Done after snooze so cleanup's onWatcherDisconnect is a no-op
+        // (session already removed by snooze).
+        const watcherRes = activeWatchers.get(sessionToken);
+        if (watcherRes) {
+          activeWatchers.delete(sessionToken);
+          sendJSON(watcherRes, 200, { event: 'snoozed' });
+        }
         sendJSON(res, 200, { ok });
       } catch (err) {
         sendJSON(res, 400, { error: (err as Error).message });
