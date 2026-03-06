@@ -253,10 +253,14 @@ export function createEnrollmentServer(options: EnrollmentOptions): EnrollmentSe
           sendJSON(res, 400, { error: 'Missing identity or joinToken' });
           return;
         }
+        if (!ip) {
+          sendJSON(res, 400, { error: 'Missing ip (peer reachable address)' });
+          return;
+        }
         joinTokens.set(identity, {
           identity,
           joinToken,
-          ip: ip || '0.0.0.0',
+          ip,
           port: joinPort || 3179,
           expiresAt: Date.now() + 15 * 60 * 1000,
         });

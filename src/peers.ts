@@ -41,6 +41,17 @@ export class PeerRouter {
     if (!tm) {
       throw new Error(`Unknown peer: "${peerIdentity}". Known peers: ${this.listPeers().join(', ') || '(none)'}`);
     }
+
+    // Config refresh: rebuild transport if URL or token changed (re-read from disk)
+    clearConfigCache();
+    const config = loadConfig();
+    const peerConfig = config.remotes?.[peerIdentity];
+    if (peerConfig && tm.baseUrl !== peerConfig.httpUrl) {
+      log.info(`Peer "${peerIdentity}" URL changed (${tm.baseUrl} → ${peerConfig.httpUrl}), rebuilding transport`);
+      this.addPeer(peerIdentity, peerConfig);
+      tm = this._peers.get(peerIdentity)!;
+    }
+
     return tm;
   }
 

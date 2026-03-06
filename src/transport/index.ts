@@ -28,6 +28,10 @@ export class TransportManager {
     });
   }
 
+  get baseUrl(): string | null {
+    return this._http.baseUrl;
+  }
+
   async send(message: Message): Promise<Message> {
     log.info('Sending via HTTP transport');
     message.transport = 'http';

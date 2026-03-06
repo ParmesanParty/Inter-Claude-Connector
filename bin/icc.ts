@@ -1200,6 +1200,10 @@ async function invite(): Promise<void> {
 
   // Accept --host or --ip (backwards compat alias)
   const host = (flags.host || flags.ip) as string | undefined;
+  if (!host) {
+    console.error('--host is required (the peer\'s reachable address, e.g. hostname or IP)');
+    process.exit(1);
+  }
 
   const peerPort = flags.port ? parseInt(flags.port as string, 10) : 3179;
   const { loadConfig, writeConfig, clearConfigCache, getLocalToken } = await import('../src/config.ts');
