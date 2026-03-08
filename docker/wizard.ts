@@ -17,11 +17,11 @@ const log = createLogger('wizard');
 interface WizardOptions {
   host?: string;
   port?: number;
-  onComplete: () => Promise<void>;
+  onComplete: (setupToken: string) => Promise<void>;
 }
 
-export async function startSetupWizard(options: WizardOptions): Promise<void> {
-  const { host = '0.0.0.0', port = 3179, onComplete } = options;
+export async function startSetupWizard(options: WizardOptions & { localhostHttpPort?: number }): Promise<void> {
+  const { host = '0.0.0.0', port = 3179, onComplete, localhostHttpPort } = options;
   const tlsDir = join(homedir(), '.icc', 'tls');
 
   // Dynamic challenge route (added during join flow)
@@ -137,11 +137,14 @@ export async function startSetupWizard(options: WizardOptions): Promise<void> {
 
         log.info(`CA initialized for identity "${identity}"`);
 
-        sendJSON(res, 200, { ok: true, identity, localToken }, corsHeaders);
+        // Generate one-time setup token for /setup/claude-code
+        const setupToken = randomBytes(32).toString('hex');
+
+        sendJSON(res, 200, { ok: true, identity, localToken, setupToken }, corsHeaders);
 
         // Stop wizard and transition to normal mode
         server.close(async () => {
-          await onComplete();
+          await onComplete(setupToken);
         });
       } catch (err) {
         log.error(`Init CA failed: ${(err as Error).message}`);
@@ -247,11 +250,14 @@ export async function startSetupWizard(options: WizardOptions): Promise<void> {
 
         log.info(`Joined mesh as "${identity}" via CA "${caIdentity}"`);
 
-        sendJSON(res, 200, { ok: true, identity, localToken, peers }, corsHeaders);
+        // Generate one-time setup token for /setup/claude-code
+        const setupToken = randomBytes(32).toString('hex');
+
+        sendJSON(res, 200, { ok: true, identity, localToken, peers, setupToken }, corsHeaders);
 
         // Stop wizard and transition to normal mode
         server.close(async () => {
-          await onComplete();
+          await onComplete(setupToken);
         });
       } catch (err) {
         log.error(`Join failed: ${(err as Error).message}`);
@@ -263,7 +269,7 @@ export async function startSetupWizard(options: WizardOptions): Promise<void> {
     // Wizard HTML UI
     if (method === 'GET' && (url === '/' || url === '/index.html')) {
       res.writeHead(200, { 'Content-Type': 'text/html', ...corsHeaders });
-      res.end(getWizardHTML());
+      res.end(getWizardHTML(localhostHttpPort || port));
       return;
     }
 
@@ -278,7 +284,7 @@ export async function startSetupWizard(options: WizardOptions): Promise<void> {
   });
 }
 
-function getWizardHTML(): string {
+function getWizardHTML(localhostPort: number): string {
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -448,8 +454,8 @@ function getWizardHTML(): string {
       <p style="color: #8b98a5; font-size: 0.85rem; line-height: 1.5; margin-bottom: 0.75rem;">
         Open any Claude Code session and paste this prompt:
       </p>
-      <div style="background: #0f1419; border: 1px solid #2f3336; border-radius: 6px; padding: 0.75rem 1rem; font-family: monospace; font-size: 0.85rem; color: #e7e9ea; cursor: pointer; position: relative;" onclick="navigator.clipboard.writeText(this.innerText.replace('Copied!','').trim())" title="Click to copy">
-        Set up ICC integration by fetching and applying the configuration from http://localhost:3179/setup/claude-code
+      <div id="setup-prompt" style="background: #0f1419; border: 1px solid #2f3336; border-radius: 6px; padding: 0.75rem 1rem; font-family: monospace; font-size: 0.85rem; color: #e7e9ea; cursor: pointer; position: relative;" onclick="navigator.clipboard.writeText(this.innerText.replace('Copied!','').trim())" title="Click to copy">
+        Loading setup URL...
       </div>
       <p style="color: #71767b; font-size: 0.8rem; margin-top: 0.5rem;">
         This configures MCP, hooks, skills, and CLAUDE.md automatically.
@@ -462,8 +468,8 @@ function getWizardHTML(): string {
         <p style="color: #8b98a5; font-size: 0.85rem; margin-bottom: 0.5rem;">
           If you prefer to configure manually, fetch the setup JSON:
         </p>
-        <div style="background: #0f1419; border: 1px solid #2f3336; border-radius: 6px; padding: 0.75rem 1rem; font-family: monospace; font-size: 0.85rem; color: #e7e9ea;">
-          curl http://localhost:3179/setup/claude-code
+        <div id="setup-curl" style="background: #0f1419; border: 1px solid #2f3336; border-radius: 6px; padding: 0.75rem 1rem; font-family: monospace; font-size: 0.85rem; color: #e7e9ea;">
+          Loading...
         </div>
         <p style="color: #8b98a5; font-size: 0.85rem; margin-top: 0.5rem;">
           Then apply each section to the target file listed in the response.
@@ -476,6 +482,7 @@ function getWizardHTML(): string {
 </div>
 
 <script>
+window.__ICC_LOCALHOST_PORT = ${localhostPort};
 async function initCA() {
   const identity = document.getElementById('ca-identity').value.trim();
   if (!identity) { showError('ca-error', 'Identity is required'); return; }
@@ -491,7 +498,7 @@ async function initCA() {
     });
     const data = await res.json();
     if (!res.ok || !data.ok) throw new Error(data.error || 'Init failed');
-    showSuccess(data.identity, data.localToken);
+    showSuccess(data.identity, data.localToken, null, data.setupToken);
   } catch (err) {
     showError('ca-error', err.message);
     setLoading('btn-init-ca', 'ca-loading', false);
@@ -573,7 +580,7 @@ async function joinMesh() {
     });
     const data = await res.json();
     if (!res.ok || !data.ok) throw new Error(data.error || 'Join failed');
-    showSuccess(data.identity, data.localToken, data.peers);
+    showSuccess(data.identity, data.localToken, data.peers, data.setupToken);
   } catch (err) {
     showError('join-error', err.message);
     setLoading('btn-join', 'join-loading', false);
@@ -597,7 +604,7 @@ function setLoading(btnId, loadingId, loading) {
   else el.classList.add('hidden');
 }
 
-function showSuccess(identity, token, peers) {
+function showSuccess(identity, token, peers, setupToken) {
   document.getElementById('setup-cards').classList.add('hidden');
   document.getElementById('success-screen').classList.remove('hidden');
   document.getElementById('result-identity').textContent = identity;
@@ -606,6 +613,15 @@ function showSuccess(identity, token, peers) {
     document.getElementById('result-peers-section').classList.remove('hidden');
     document.getElementById('result-peers').textContent = peers.join(', ');
   }
+  // Build setup URL with one-time token
+  const localhostPort = window.__ICC_LOCALHOST_PORT || 3179;
+  const setupUrl = setupToken
+    ? 'http://localhost:' + localhostPort + '/setup/claude-code?token=' + setupToken
+    : 'http://localhost:' + localhostPort + '/setup/claude-code';
+  const promptEl = document.getElementById('setup-prompt');
+  if (promptEl) promptEl.textContent = 'Set up ICC integration by fetching and applying the configuration from ' + setupUrl;
+  const curlEl = document.getElementById('setup-curl');
+  if (curlEl) curlEl.textContent = 'curl ' + setupUrl;
 }
 </script>
 </body>

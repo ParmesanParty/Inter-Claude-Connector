@@ -29,7 +29,9 @@ async function isConfigured(): Promise<boolean> {
   }
 }
 
-async function startServices(): Promise<void> {
+const LOCALHOST_HTTP_PORT = parseInt(process.env.ICC_LOCALHOST_HTTP_PORT || '3178', 10);
+
+async function startServices(setupToken?: string): Promise<void> {
   // Clear config cache to pick up any wizard-written config
   const { clearConfigCache } = await import('../src/config.ts');
   clearConfigCache();
@@ -39,6 +41,8 @@ async function startServices(): Promise<void> {
   const server = createICCServer({
     host: '0.0.0.0',
     enableMcp: true,
+    localhostHttpPort: LOCALHOST_HTTP_PORT,
+    setupToken,
   });
 
   const { port, host } = await server.start();
@@ -93,9 +97,10 @@ async function main(): Promise<void> {
     await startSetupWizard({
       host: '0.0.0.0',
       port: 3179,
-      onComplete: async () => {
+      localhostHttpPort: LOCALHOST_HTTP_PORT,
+      onComplete: async (setupToken: string) => {
         log.info('Wizard complete — transitioning to normal mode');
-        await startServices();
+        await startServices(setupToken);
       },
     });
     log.info('Setup wizard available at http://0.0.0.0:3179');

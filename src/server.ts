@@ -163,6 +163,8 @@ interface ICCServerOptions {
   host?: string;
   noAuth?: boolean;
   enableMcp?: boolean;
+  localhostHttpPort?: number;
+  setupToken?: string;
 }
 
 interface ICCServer {
@@ -196,6 +198,12 @@ export function createICCServer(options: ICCServerOptions = {}): ICCServer {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- McpServer from MCP SDK
   let mcpServer: any = null;
 
+  // One-time setup token — disabled after first successful fetch
+  let setupToken: string | null = options.setupToken ?? null;
+  const localhostHttpPort = options.localhostHttpPort ?? null;
+  // Localhost HTTP base URL for setup/claude-code response
+  const localBaseUrl = localhostHttpPort ? `http://localhost:${localhostHttpPort}` : `http://localhost:${port}`;
+
   // Initialize inbox, desktop notifications, and read receipts
   initInbox();
   setNotifier(createDesktopNotifier(config));
@@ -207,8 +215,14 @@ export function createICCServer(options: ICCServerOptions = {}): ICCServer {
     const url = (req.url || '').split('?')[0]!;
     log.debug(`${method} ${url}`);
 
-    // MCP HTTP transport — handle /mcp path
+    // MCP HTTP transport — handle /mcp path (requires localToken via ?token= query param)
     if (mcpTransport && url === '/mcp') {
+      const mcpQuery = new URL(req.url || '/', 'http://localhost');
+      const mcpToken = mcpQuery.searchParams.get('token');
+      if (config.server.localToken && (!mcpToken || !safeTokenEquals(mcpToken, config.server.localToken))) {
+        baseSendJSON(res, 401, { error: 'Unauthorized — MCP requires ?token=<localToken>' });
+        return;
+      }
       await mcpTransport.handleRequest(req, res);
       return;
     }
@@ -384,16 +398,30 @@ export function createICCServer(options: ICCServerOptions = {}): ICCServer {
     }
 
     // GET /setup/claude-code — bootstrapping endpoint for Claude Code self-configuration
-    // No auth required — this is the first thing a new user hits before auth exists.
-    // Contains no secrets (hooks use session-token flow, MCP URL needs no token).
+    // Gated by one-time setupToken (if configured). Disabled after first successful fetch.
     if (method === 'GET' && url === '/setup/claude-code') {
-      const serverPort = port;
+      if (setupToken) {
+        const setupQuery = new URL(req.url || '/', 'http://localhost');
+        const providedToken = setupQuery.searchParams.get('token');
+        if (!providedToken || !safeTokenEquals(providedToken, setupToken)) {
+          sendJSON(res, 403, { error: 'Invalid or missing setup token' });
+          return;
+        }
+      } else if (config.server.localToken) {
+        // No setupToken configured — require localToken as fallback
+        const auth = checkAuth(req, config);
+        if (!auth.authenticated) {
+          sendJSON(res, 401, { error: 'Unauthorized' });
+          return;
+        }
+      }
+      const serverPort = localhostHttpPort ?? port;
       sendJSON(res, 200, {
         instructions: 'Apply these configurations to integrate Claude Code with this ICC server. For each config file: create parent directories if needed, merge into existing content (do not overwrite unrelated keys). Write each skill file to the specified target path (create directories as needed). After writing all files, tell the user to restart Claude Code for MCP changes to take effect.',
         mcp: {
           target: '~/.claude.json',
           mergeKey: 'mcpServers.icc',
-          config: { type: 'url', url: `http://localhost:${serverPort}/mcp` },
+          config: { type: 'url', url: `${localBaseUrl}/mcp${config.server.localToken ? '?token=' + config.server.localToken : ''}` },
         },
         hooks: {
           target: '~/.claude/settings.json',
@@ -404,28 +432,28 @@ export function createICCServer(options: ICCServerOptions = {}): ICCServer {
                 matcher: 'startup',
                 hooks: [{
                   type: 'command',
-                  command: `curl -sf -X POST http://localhost:${serverPort}/api/hook/startup -H 'Content-Type: application/json' -d '{"instance":"'"$(basename $PWD)"'"}'`,
+                  command: `curl -sf -X POST ${localBaseUrl}/api/hook/startup -H 'Content-Type: application/json' -d '{"instance":"'"$(basename $PWD)"'"}'`,
                 }],
               },
               {
                 matcher: 'resume',
                 hooks: [{
                   type: 'command',
-                  command: `curl -sf -X POST http://localhost:${serverPort}/api/hook/startup -H 'Content-Type: application/json' -d '{"instance":"'"$(basename $PWD)"'"}'`,
+                  command: `curl -sf -X POST ${localBaseUrl}/api/hook/startup -H 'Content-Type: application/json' -d '{"instance":"'"$(basename $PWD)"'"}'`,
                 }],
               },
               {
                 matcher: 'compact',
                 hooks: [{
                   type: 'command',
-                  command: `ST=$(cat /tmp/icc-session-$PPID.token 2>/dev/null); [ -n "$ST" ] && curl -sf -X POST http://localhost:${serverPort}/api/hook/heartbeat -H 'Content-Type: application/json' -d "{\\"sessionToken\\":\\"$ST\\"}" || true`,
+                  command: `ST=$(cat /tmp/icc-session-$PPID.token 2>/dev/null); [ -n "$ST" ] && curl -sf -X POST ${localBaseUrl}/api/hook/heartbeat -H 'Content-Type: application/json' -d "{\\"sessionToken\\":\\"$ST\\"}" || true`,
                 }],
               },
               {
                 matcher: 'clear',
                 hooks: [{
                   type: 'command',
-                  command: `curl -sf -X POST http://localhost:${serverPort}/api/hook/startup -H 'Content-Type: application/json' -d '{"instance":"'"$(basename $PWD)"'"}'`,
+                  command: `curl -sf -X POST ${localBaseUrl}/api/hook/startup -H 'Content-Type: application/json' -d '{"instance":"'"$(basename $PWD)"'"}'`,
                 }],
               },
             ],
@@ -433,7 +461,7 @@ export function createICCServer(options: ICCServerOptions = {}): ICCServer {
               {
                 hooks: [{
                   type: 'command',
-                  command: `ST=$(cat /tmp/icc-session-$PPID.token 2>/dev/null); [ -n "$ST" ] && curl -sf -X POST http://localhost:${serverPort}/api/hook/heartbeat -H 'Content-Type: application/json' -d "{\\"sessionToken\\":\\"$ST\\"}" || true`,
+                  command: `ST=$(cat /tmp/icc-session-$PPID.token 2>/dev/null); [ -n "$ST" ] && curl -sf -X POST ${localBaseUrl}/api/hook/heartbeat -H 'Content-Type: application/json' -d "{\\"sessionToken\\":\\"$ST\\"}" || true`,
                 }],
               },
             ],
@@ -442,14 +470,14 @@ export function createICCServer(options: ICCServerOptions = {}): ICCServer {
                 matcher: 'Bash',
                 hooks: [{
                   type: 'command',
-                  command: `cat | curl -sf -X POST http://localhost:${serverPort}/api/hook/pre-bash -H 'Content-Type: application/json' -d @-`,
+                  command: `cat | curl -sf -X POST ${localBaseUrl}/api/hook/pre-bash -H 'Content-Type: application/json' -d @-`,
                 }],
               },
               {
                 matcher: 'mcp__icc__send_message|mcp__icc__respond_to_message',
                 hooks: [{
                   type: 'command',
-                  command: `cat | curl -sf -X POST http://localhost:${serverPort}/api/hook/pre-icc-message -H 'Content-Type: application/json' -d @-`,
+                  command: `cat | curl -sf -X POST ${localBaseUrl}/api/hook/pre-icc-message -H 'Content-Type: application/json' -d @-`,
                 }],
               },
             ],
@@ -457,7 +485,7 @@ export function createICCServer(options: ICCServerOptions = {}): ICCServer {
               {
                 hooks: [{
                   type: 'command',
-                  command: `ST=$(cat /tmp/icc-session-$PPID.token 2>/dev/null); [ -n "$ST" ] && curl -sf -X POST http://localhost:${serverPort}/api/hook/session-end -H 'Content-Type: application/json' -d "{\\"sessionToken\\":\\"$ST\\"}" || true; rm -f /tmp/icc-session-$PPID.token`,
+                  command: `ST=$(cat /tmp/icc-session-$PPID.token 2>/dev/null); [ -n "$ST" ] && curl -sf -X POST ${localBaseUrl}/api/hook/session-end -H 'Content-Type: application/json' -d "{\\"sessionToken\\":\\"$ST\\"}" || true; rm -f /tmp/icc-session-$PPID.token`,
                 }],
               },
             ],
@@ -529,7 +557,7 @@ This is the activation point for a session — startup only checks status,
 
 2. **Register with the server.** Run this using the Bash tool:
    \`\`\`bash
-   curl -sf -X POST http://localhost:${serverPort}/api/hook/watch \\
+   curl -sf -X POST ${localBaseUrl}/api/hook/watch \\
      -H 'Content-Type: application/json' \\
      -d '{"instance":"'"$(basename $PWD)"'","pid":0}'
    \`\`\`
@@ -550,7 +578,7 @@ This is the activation point for a session — startup only checks status,
 4. **Launch the watcher.** Use the Bash tool with \`run_in_background: true\`
    and \`timeout: 600000\`:
    \`\`\`bash
-   RESULT=$(curl --max-time 591 -sf "http://localhost:${serverPort}/api/watch?instance=$(basename $PWD)&sessionToken=TOKEN"); echo "$RESULT"
+   RESULT=$(curl --max-time 591 -sf "${localBaseUrl}/api/watch?instance=$(basename $PWD)&sessionToken=TOKEN"); echo "$RESULT"
    \`\`\`
    (Replace TOKEN with the actual session token.)
 
@@ -583,7 +611,7 @@ Suppress automatic watcher launches and deregister from the server.
 
 2. Deregister with the server:
    \`\`\`bash
-   curl -sf -X POST http://localhost:${serverPort}/api/hook/snooze \\
+   curl -sf -X POST ${localBaseUrl}/api/hook/snooze \\
      -H 'Content-Type: application/json' \\
      -d '{"sessionToken":"TOKEN"}'
    \`\`\`
@@ -613,7 +641,7 @@ Re-register with the server and launch the watcher.
 
 1. **Re-register with the server:**
    \`\`\`bash
-   curl -sf -X POST http://localhost:${serverPort}/api/hook/watch \\
+   curl -sf -X POST ${localBaseUrl}/api/hook/watch \\
      -H 'Content-Type: application/json' \\
      -d '{"instance":"'"$(basename $PWD)"'","pid":0,"force":true}'
    \`\`\`
@@ -626,7 +654,7 @@ Re-register with the server and launch the watcher.
 3. **Launch the watcher.** Use the Bash tool with \`run_in_background: true\`
    and \`timeout: 600000\`:
    \`\`\`bash
-   RESULT=$(curl --max-time 591 -sf "http://localhost:${serverPort}/api/watch?instance=$(basename $PWD)&sessionToken=TOKEN"); echo "$RESULT"
+   RESULT=$(curl --max-time 591 -sf "${localBaseUrl}/api/watch?instance=$(basename $PWD)&sessionToken=TOKEN"); echo "$RESULT"
    \`\`\`
 
 4. Confirm: "ICC watcher re-activated."`,
@@ -634,6 +662,11 @@ Re-register with the server and launch the watcher.
         },
         postSetup: 'Restart Claude Code for MCP changes to take effect. After restart, the SessionStart hook will confirm ICC connectivity. Run /watch to activate the mail watcher.',
       });
+      // Consume setup token — endpoint disabled for subsequent requests
+      if (setupToken) {
+        log.info('Setup token consumed — /setup/claude-code disabled');
+        setupToken = null;
+      }
       return;
     }
 
@@ -1194,6 +1227,10 @@ Re-register with the server and launch the watcher.
     ? createSecureServer({ ...tlsOpts, requestCert: true, rejectUnauthorized: true }, handler)
     : createServer(handler);
 
+  // Localhost-only plain HTTP server (when TLS enabled + localhostHttpPort configured)
+  // Allows local clients (MCP, hooks) to connect without client certs
+  const localhostServer = (tlsOpts && localhostHttpPort) ? createServer(handler) : null;
+
   const CLEANUP_INTERVAL_MS = 24 * 60 * 60 * 1000; // 24 hours
   let cleanupTimer: ReturnType<typeof setInterval> | null = null;
   let renewalTimer: ReturnType<typeof setInterval> | null = null;
@@ -1284,6 +1321,13 @@ Re-register with the server and launch the watcher.
             renewalTimer.unref();
           }
 
+          // Start localhost HTTP server if configured
+          if (localhostServer && localhostHttpPort) {
+            localhostServer.listen(localhostHttpPort, '127.0.0.1', () => {
+              log.info(`Localhost HTTP listener on 127.0.0.1:${localhostHttpPort}`);
+            });
+          }
+
           resolve({ port: addr.port, host });
         });
       });
@@ -1317,7 +1361,12 @@ Re-register with the server and launch the watcher.
       }
       activeWatchers.clear();
       return new Promise<void>((resolve) => {
-        server.close(() => resolve());
+        const closeMain = () => server.close(() => resolve());
+        if (localhostServer) {
+          localhostServer.close(() => closeMain());
+        } else {
+          closeMain();
+        }
       });
     },
     server,
