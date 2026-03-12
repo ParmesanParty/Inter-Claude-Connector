@@ -201,10 +201,10 @@ describe('GET /setup/claude-code', () => {
     });
   });
 
-  it('returns valid MCP config with URL transport', async () => {
+  it('returns valid MCP config with HTTP transport', async () => {
     await withServer({}, async (port) => {
       const res = await httpJSON(port, 'GET', '/setup/claude-code');
-      assert.equal(res.data.mcp.config.type, 'url');
+      assert.equal(res.data.mcp.config.type, 'http');
       assert.ok(res.data.mcp.config.url.includes('/mcp'));
       assert.equal(res.data.mcp.mergeKey, 'mcpServers.icc');
     });
