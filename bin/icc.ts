@@ -1194,7 +1194,7 @@ async function tls() {
 async function invite(): Promise<void> {
   const identity = positional[0];
   if (!identity) {
-    console.error('Usage: icc invite <identity> [--host <address>] [--port 3179]');
+    console.error('Usage: icc invite <identity> --host <peer-addr> [--ca-host <ca-addr>] [--port 3179]');
     process.exit(1);
   }
 
@@ -1205,6 +1205,7 @@ async function invite(): Promise<void> {
     process.exit(1);
   }
 
+  const caHost = flags['ca-host'] as string | undefined;
   const peerPort = flags.port ? parseInt(flags.port as string, 10) : 3179;
   const { loadConfig, writeConfig, clearConfigCache, getLocalToken } = await import('../src/config.ts');
   clearConfigCache();
@@ -1273,14 +1274,18 @@ async function invite(): Promise<void> {
     caPort: enrollPort,
     joinToken,
   };
-  if (host) {
-    setupPayload.caHost = host;
-    setupPayload.host = host;
-  }
+  // caHost = CA's own address (for wizard to reach enrollment server)
+  // host  = peer's address (for CA to reach back for challenge verification)
+  if (caHost) setupPayload.caHost = caHost;
+  if (host) setupPayload.host = host;
   const setupString = 'icc:' + Buffer.from(JSON.stringify(setupPayload)).toString('base64url');
 
   console.log(`\nSetup string (paste into the setup wizard on the new host):`);
   console.log(`  ${setupString}`);
+  if (!caHost) {
+    console.log(`\nNote: no --ca-host provided — the wizard will prompt for the CA address.`);
+    console.log(`  To embed it: icc invite ${identity} --host ${host} --ca-host <this-host-ip>`);
+  }
   console.log(`\nOr run on ${identity}:`);
   console.log(`  icc join --ca ${config.identity} --token ${joinToken}`);
 }
@@ -1458,7 +1463,7 @@ Commands:
   hook <subcommand>                        Lifecycle hooks for Claude Code sessions
   instance <resolve [dir]|list>            Manage persistent instance names
   tls <init|serve|enroll|enroll-self|renew|status>  TLS certificate management
-  invite <identity> [--host <addr>] [--port N]  Generate join token for new host (CA only)
+  invite <identity> --host <peer> [--ca-host <ca>] [--port N]  Generate join token (CA only)
   join --ca <id> --token <tok> [--url U]  Join mesh using an invite token
   help                                      Show this help
 
