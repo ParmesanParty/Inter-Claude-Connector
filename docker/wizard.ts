@@ -433,7 +433,7 @@ function getWizardHTML(localhostPort: number): string {
     </div>
   </div>
 
-  <div id="success-screen" class="card hidden" style="max-width: 600px; margin: 0 auto;">
+  <div id="success-screen" class="card hidden" style="max-width: 820px; margin: 0 auto;">
     <h2>Setup Complete!</h2>
     <p class="success">ICC is configured and starting up.</p>
     <div class="result-box">
