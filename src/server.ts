@@ -709,7 +709,11 @@ Re-register with the server and launch the watcher.
 
     // Registry: list instances (auth required)
     if (method === 'GET' && url === '/api/registry') {
-      sendJSON(res, 200, { instances: registryList(), host: config.identity });
+      const instances = registryList();
+      for (const entry of instances) {
+        if (!entry.address) entry.address = buildAddress(config.identity, entry.instance);
+      }
+      sendJSON(res, 200, { instances, host: config.identity });
       return;
     }
 
