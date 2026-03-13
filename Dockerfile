@@ -26,6 +26,8 @@ RUN mkdir -p /home/icc/.icc && chown -R icc:icc /home/icc/.icc
 
 EXPOSE 3179 3180 4179
 
+ENV ICC_LOCALHOST_HTTP_PORT=3178
+
 USER icc
 
 ENTRYPOINT ["node", "docker/entrypoint.ts"]
