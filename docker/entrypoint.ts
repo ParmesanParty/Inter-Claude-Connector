@@ -31,6 +31,14 @@ async function isConfigured(): Promise<boolean> {
 
 const LOCALHOST_HTTP_PORT = parseInt(process.env.ICC_LOCALHOST_HTTP_PORT || '3178', 10);
 
+// Module-level service references for graceful shutdown
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let iccServer: any = null;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let webServer: any = null;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let enrollServer: any = null;
+
 async function startServices(setupToken?: string): Promise<void> {
   // Clear config cache to pick up any wizard-written config
   const { clearConfigCache } = await import('../src/config.ts');
@@ -38,21 +46,21 @@ async function startServices(setupToken?: string): Promise<void> {
 
   const { createICCServer } = await import('../src/server.ts');
 
-  const server = createICCServer({
+  iccServer = createICCServer({
     host: '0.0.0.0',
     enableMcp: true,
     localhostHttpPort: LOCALHOST_HTTP_PORT,
     setupToken,
   });
 
-  const { port, host } = await server.start();
+  const { port, host } = await iccServer.start();
   log.info(`ICC server running on ${host}:${port}`);
 
   // Optional: Web UI
   if (process.env.ICC_WEB_ENABLED === 'true') {
     try {
       const { createWebServer } = await import('../src/web.ts');
-      const webServer = createWebServer({ host: '0.0.0.0' });
+      webServer = createWebServer({ host: '0.0.0.0' });
       await webServer.start();
       log.info('Web UI started');
     } catch (err) {
@@ -71,7 +79,7 @@ async function startServices(setupToken?: string): Promise<void> {
         if (remote.httpUrl) peerConfigs[id] = { httpUrl: remote.httpUrl };
       }
       const { createEnrollmentServer } = await import('../src/enroll.ts');
-      const enrollServer = createEnrollmentServer({
+      enrollServer = createEnrollmentServer({
         caDir: tlsDir,
         peerConfigs,
         host: '0.0.0.0',
@@ -107,13 +115,22 @@ async function main(): Promise<void> {
   }
 }
 
-// Graceful shutdown
-const shutdown = () => {
+// Graceful shutdown — stop all services before exiting
+let shuttingDown = false;
+const shutdown = async () => {
+  if (shuttingDown) return;
+  shuttingDown = true;
   log.info('Shutting down...');
+  const timeout = setTimeout(() => { log.warn('Shutdown timeout — forcing exit'); process.exit(1); }, 10_000);
+  const stops = [iccServer, webServer, enrollServer]
+    .filter(Boolean)
+    .map(s => s!.stop().catch((err: Error) => log.warn(`Stop error: ${err.message}`)));
+  await Promise.allSettled(stops);
+  clearTimeout(timeout);
   process.exit(0);
 };
-process.on('SIGTERM', shutdown);
-process.on('SIGINT', shutdown);
+process.on('SIGTERM', () => { shutdown(); });
+process.on('SIGINT', () => { shutdown(); });
 
 main().catch((err) => {
   log.error(`Fatal: ${(err as Error).message}`);
