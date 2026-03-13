@@ -1159,6 +1159,18 @@ Re-register with the server and launch the watcher.
           return;
         }
 
+        // Auto-approve watcher lifecycle commands (Docker mode)
+        // These fire every watcher cycle and must not prompt the user
+        const watcherAutoApprove = [
+          /curl\s+--max-time\s+\d+\s.*localhost:3178\/api\/watch/,  // long-poll watcher
+          /^echo\s+"[a-f0-9]+"\s*>\s*\/tmp\/icc-session-/,          // session token save
+          /curl\s+-sf\s+-X\s+POST\s+http:\/\/localhost:3178\/api\/hook\/watch\b/, // re-registration
+        ];
+        if (watcherAutoApprove.some(p => p.test(command))) {
+          sendJSON(res, 200, { decision: 'approve' });
+          return;
+        }
+
         sendJSON(res, 200, {});
       } catch (err) {
         sendJSON(res, 400, { error: (err as Error).message });
