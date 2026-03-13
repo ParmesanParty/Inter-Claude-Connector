@@ -413,7 +413,7 @@ export function createICCServer(options: ICCServerOptions = {}): ICCServer {
     }
 
     // GET /setup/claude-code — bootstrapping endpoint for Claude Code self-configuration
-    // Gated by one-time setupToken (if configured). Disabled after first successful fetch.
+    // Gated by one-time setupToken during wizard flow, then by localToken auth permanently.
     if (method === 'GET' && url === '/setup/claude-code') {
       if (setupToken) {
         const setupQuery = new URL(req.url || '/', 'http://localhost');
@@ -692,9 +692,9 @@ Re-register with the server and launch the watcher.
         },
         postSetup: 'Restart Claude Code for MCP changes to take effect. After restart, the SessionStart hook will confirm ICC connectivity. Run /watch to activate the mail watcher.',
       });
-      // Consume setup token — endpoint disabled for subsequent requests
+      // Consume one-time setup token — subsequent requests require localToken auth
       if (setupToken) {
-        log.info('Setup token consumed — /setup/claude-code disabled');
+        log.info('Setup token consumed — /setup/claude-code now requires localToken auth');
         setupToken = null;
       }
       return;
