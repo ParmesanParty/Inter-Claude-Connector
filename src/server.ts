@@ -1310,6 +1310,7 @@ Re-register with the server and launch the watcher.
     clearConfigCache();
     config = loadConfig({ reload: true });
     setReceiptSender(createReceiptSender(config));
+    reloadTlsContext();
     log.info('Config hot-reloaded from disk');
   }
 
