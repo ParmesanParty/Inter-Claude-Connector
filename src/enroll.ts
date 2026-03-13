@@ -1,9 +1,11 @@
 import { createServer, request as httpRequest } from 'node:http';
+import { request as httpsRequest } from 'node:https';
 import type { IncomingMessage, ServerResponse, Server } from 'node:http';
 import { randomBytes } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { signCSR } from './tls.ts';
+import { getTlsOptions } from './config.ts';
 import { createLogger } from './util/logger.ts';
 import { readBody, sendJSON } from './util/http.ts';
 
@@ -90,6 +92,27 @@ export function createEnrollmentServer(options: EnrollmentOptions): EnrollmentSe
     for (const [id, enrollment] of enrollments) {
       if (enrollment.expiresAt < now) enrollments.delete(id);
     }
+  }
+
+  /** Tell the co-located ICC server to hot-reload config from disk. */
+  function notifyLocalReload(config: Parameters<typeof getTlsOptions>[0] & { server: { port?: number; localToken?: string | null } }): void {
+    const port = config.server.port || 3179;
+    const token = config.server.localToken || '';
+    const tlsOpts = getTlsOptions(config);
+    const protocol = tlsOpts ? 'https' : 'http';
+    const requestFn = tlsOpts ? httpsRequest : httpRequest;
+    const req = requestFn(`${protocol}://127.0.0.1:${port}/api/reload-config`, {
+      method: 'POST',
+      timeout: 5000,
+      ...tlsOpts,
+      headers: {
+        'Content-Length': '0',
+        ...(token && { 'Authorization': `Bearer ${token}` }),
+      },
+    });
+    req.on('error', (err: Error) => log.warn(`reload-config notify failed: ${err.message}`));
+    req.on('timeout', () => { req.destroy(); });
+    req.end();
   }
 
   function pushMeshUpdate(config: { remotes: Record<string, { httpUrl?: string; token?: string }> }, peerIdentity: string, payload: unknown): void {
@@ -422,6 +445,9 @@ export function createEnrollmentServer(options: EnrollmentOptions): EnrollmentSe
         }
         writeConfig(config);
         joinTokens.delete(entry.identity);
+
+        // Tell the local ICC server to hot-reload config
+        notifyLocalReload(config);
 
         log.info(`Join complete for "${entry.identity}" — ${peers.length} peers configured`);
         sendJSON(res, 200, { cert, caCert, peers });

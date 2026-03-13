@@ -185,7 +185,7 @@ function buildCaEnrollUrl(config: ICCConfig, tlsDir: string): string | null {
 }
 
 export function createICCServer(options: ICCServerOptions = {}): ICCServer {
-  const config = loadConfig();
+  let config = loadConfig();
   const port = options.port ?? config.server.port;
   const host = options.host ?? config.server.host;
   const tlsOpts = getTlsOptions(config);
@@ -985,6 +985,7 @@ Re-register with the server and launch the watcher.
           config.server.peerTokens[peer.identity] = peer.peerToken;
 
           writeConfig(config);
+          reloadConfig();
 
           inboxPush({
             from: `${caIdentity}/ca`,
@@ -1002,6 +1003,17 @@ Re-register with the server and launch the watcher.
       } catch (err) {
         sendJSON(res, 400, { error: (err as Error).message });
       }
+      return;
+    }
+
+    // POST /api/reload-config — hot-reload config from disk (local only)
+    if (method === 'POST' && url === '/api/reload-config') {
+      if (!auth.authenticated || auth.identity !== '_local') {
+        sendJSON(res, 403, { error: 'Only local clients can trigger config reload' });
+        return;
+      }
+      reloadConfig();
+      sendJSON(res, 200, { ok: true });
       return;
     }
 
@@ -1279,6 +1291,14 @@ Re-register with the server and launch the watcher.
       log.error(`TLS context reload failed: ${(err as Error).message}`);
     }
     return false;
+  }
+
+  /** Re-read config from disk and update all in-memory references. */
+  function reloadConfig(): void {
+    clearConfigCache();
+    config = loadConfig({ reload: true });
+    setReceiptSender(createReceiptSender(config));
+    log.info('Config hot-reloaded from disk');
   }
 
   // SIGHUP handler for manual TLS hot-reload
