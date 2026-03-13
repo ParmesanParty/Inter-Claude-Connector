@@ -8,7 +8,7 @@
  * - Wizard completion transitions to normal mode in-process
  */
 
-import { existsSync, mkdirSync } from 'node:fs';
+import { existsSync, mkdirSync, accessSync, writeFileSync, unlinkSync, constants } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { createLogger } from '../src/util/logger.ts';
@@ -39,10 +39,45 @@ let webServer: any = null;
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 let enrollServer: any = null;
 
+function preflight(config: { server: { tls: { enabled: boolean; certPath: string | null; keyPath: string | null; caPath: string | null } } }): void {
+  // Check data dir is writable
+  const testFile = join(iccDir, '.preflight-test');
+  try {
+    writeFileSync(testFile, 'test');
+    unlinkSync(testFile);
+  } catch (err) {
+    log.error(`Data directory ${iccDir} is not writable: ${(err as Error).message}`);
+    process.exit(1);
+  }
+
+  // Check TLS certs exist if TLS is enabled
+  if (config.server.tls.enabled) {
+    for (const [label, path] of Object.entries({
+      cert: config.server.tls.certPath,
+      key: config.server.tls.keyPath,
+      ca: config.server.tls.caPath,
+    })) {
+      if (!path) {
+        log.error(`TLS is enabled but ${label} path is not configured`);
+        process.exit(1);
+      }
+      try {
+        accessSync(path, constants.R_OK);
+      } catch {
+        log.error(`TLS ${label} file not readable: ${path}`);
+        process.exit(1);
+      }
+    }
+  }
+}
+
 async function startServices(setupToken?: string): Promise<void> {
   // Clear config cache to pick up any wizard-written config
-  const { clearConfigCache } = await import('../src/config.ts');
+  const { clearConfigCache, loadConfig } = await import('../src/config.ts');
   clearConfigCache();
+
+  const config = loadConfig();
+  preflight(config);
 
   const { createICCServer } = await import('../src/server.ts');
 
