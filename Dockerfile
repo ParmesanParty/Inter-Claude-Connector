@@ -28,6 +28,8 @@ EXPOSE 3179 3180 4179
 
 ENV ICC_LOCALHOST_HTTP_PORT=3178
 
+HEALTHCHECK --interval=30s --timeout=5s --retries=3 --start-period=10s CMD ["node", "docker/healthcheck.ts"]
+
 USER icc
 
 ENTRYPOINT ["node", "docker/entrypoint.ts"]
