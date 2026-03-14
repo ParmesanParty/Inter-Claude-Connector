@@ -657,7 +657,17 @@ async function hook() {
         break;
       }
 
-      // Register with server if no session token exists yet
+      // Validate existing token — if server restarted (e.g. docker rebuild),
+      // our token is stale and we need to re-register.
+      const existingToken = getSessionToken();
+      if (existingToken) {
+        const hb = await hookRequest('/api/hook/heartbeat', { sessionToken: existingToken });
+        if (hb && !hb.ok && hb.reason === 'unknown_token') {
+          deleteSessionToken();
+        }
+      }
+
+      // Register with server if no (valid) session token exists
       if (!getSessionToken()) {
         const regResult = await hookRequest('/api/hook/watch', {
           instance: instanceName,

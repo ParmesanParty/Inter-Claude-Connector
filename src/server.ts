@@ -1068,7 +1068,7 @@ Re-register with the server and launch the watcher.
           return;
         }
         const ok = sessionHeartbeat(sessionToken);
-        sendJSON(res, 200, { ok });
+        sendJSON(res, 200, ok ? { ok } : { ok, reason: 'unknown_token' });
       } catch (err) {
         sendJSON(res, 400, { error: (err as Error).message });
       }
