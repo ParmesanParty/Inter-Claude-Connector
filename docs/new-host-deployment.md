@@ -26,6 +26,12 @@ Both paths share the same prerequisites and post-join steps.
 - The new host's hostname or IP must be reachable from existing peers
 - An existing peer to coordinate with (the CA host, for Path A)
 
+**Network note:** If the new host is on a different network (e.g. a
+cloud VPS), use a VPN like Tailscale or WireGuard for peer
+connectivity. For Tailscale, allowing inbound `3179/tcp` from the
+CGNAT range (`100.64.0.0/10`) is sufficient. Use Tailscale IPs for
+all `--ip` flags and remote URLs during setup.
+
 ### 1. Install system dependencies
 
 ICC requires Git, Node.js 24, and C/C++ build tools (for the
@@ -121,6 +127,13 @@ WorkingDirectory=/home/<your-user>/code/inter-claude-connector
 WantedBy=default.target
 ```
 
+**Important:** The server requires a config file to start. If you
+haven't run `icc init` yet and are using Path A, initialize first:
+
+```bash
+icc init --identity <your-identity>
+```
+
 Enable lingering (so the service survives logout) and start:
 
 ```bash
@@ -136,6 +149,10 @@ systemctl --user status icc-server --no-pager
 journalctl --user -u icc-server -n 5 --no-pager
 # Should see: "ICC server listening on HTTP 0.0.0.0:3179"
 ```
+
+**Note:** `journalctl --user` may show no entries when running as
+root. Use `ss -tlnp | grep 3179` as a fallback to verify the server
+is listening.
 
 The server must be running before joining the mesh — both paths require
 it for TLS challenge verification.
@@ -171,6 +188,18 @@ This automatically:
 - Gets a CA-signed certificate
 - Configures TLS, peer tokens, and remote entries for all mesh peers
 - The CA separately pushes mesh updates to existing peers via `icc invite`
+
+If `icc join` reports some peers as "skipped (unreachable)", those
+peers weren't automatically configured. This can happen when:
+
+- The new host can't reach existing peers (different network)
+- The CA's mesh-update push to existing peers fails
+
+In this case, you'll need to manually exchange tokens and add remotes
+for the skipped peers. From the CA host, use the `POST /api/mesh-update`
+endpoint with mTLS client certs to push the new peer to each existing
+peer, then configure the new host with those peers' Tailscale/VPN URLs
+and tokens via `icc config --set`.
 
 ### A3. Restart with TLS
 

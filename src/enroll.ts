@@ -5,7 +5,7 @@ import { randomBytes } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { signCSR } from './tls.ts';
-import { getTlsOptions } from './config.ts';
+import { getTlsOptions, createIdentityVerifier } from './config.ts';
 import { createLogger } from './util/logger.ts';
 import { readBody, sendJSON } from './util/http.ts';
 
@@ -115,29 +115,32 @@ export function createEnrollmentServer(options: EnrollmentOptions): EnrollmentSe
     req.end();
   }
 
-  function pushMeshUpdate(config: { remotes: Record<string, { httpUrl?: string; token?: string }> }, peerIdentity: string, payload: unknown): void {
+  function pushMeshUpdate(config: Parameters<typeof getTlsOptions>[0] & { remotes: Record<string, { httpUrl?: string; token?: string }> }, peerIdentity: string, payload: unknown): void {
     const peer = config.remotes[peerIdentity];
     if (!peer?.httpUrl) return;
     const token = peer.token || '';
     const url = new URL('/api/mesh-update', peer.httpUrl);
     const data = JSON.stringify(payload);
     const isHttps = url.protocol === 'https:';
-    const reqFn = isHttps ? (import('node:https').then(m => m.request)) : Promise.resolve(httpRequest);
-    reqFn.then(requestFn => {
-      const req = requestFn(url, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Content-Length': String(Buffer.byteLength(data)),
-          'Authorization': `Bearer ${token}`,
-        },
-        timeout: 10000,
-      });
-      req.on('error', (err: Error) => log.warn(`mesh-update push to ${peerIdentity} failed: ${err.message}`));
-      req.on('timeout', () => { req.destroy(); });
-      req.write(data);
-      req.end();
-    }).catch((err: Error) => log.warn(`mesh-update push to ${peerIdentity} failed: ${err.message}`));
+    const requestFn = isHttps ? httpsRequest : httpRequest;
+    const tlsOpts = isHttps ? {
+      ...getTlsOptions(config),
+      checkServerIdentity: createIdentityVerifier(peerIdentity),
+    } : {};
+    const req = requestFn(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Content-Length': String(Buffer.byteLength(data)),
+        'Authorization': `Bearer ${token}`,
+      },
+      timeout: 10000,
+      ...tlsOpts,
+    });
+    req.on('error', (err: Error) => log.warn(`mesh-update push to ${peerIdentity} failed: ${err.message}`));
+    req.on('timeout', () => { req.destroy(); });
+    req.write(data);
+    req.end();
   }
 
   const server = createServer(async (req: IncomingMessage, res: ServerResponse) => {
