@@ -566,15 +566,25 @@ async function hookRequest(path: string, body: Record<string, unknown>): Promise
 }
 
 /**
- * GET-variant of hookRequest for health checks and other non-mutating calls.
- * Returns parsed JSON on success, or null on any error (connection refused,
- * timeout, non-2xx, JSON parse failure). 1-second timeout — intentionally
- * short so it does not delay a healthy SessionStart.
+ * Tagged GET result. `ok: true` carries the parsed JSON body.
+ * `ok: false` carries the failure reason:
+ *   - `unreachable` — connection refused, timeout, TLS error
+ *   - `http`        — non-2xx response (status populated)
+ *   - `parse`       — response was not valid JSON
  */
-async function hookGet(path: string): Promise<any> {
-  // /api/health requires no auth (verified in src/server.ts), so we send no
-  // Authorization header. If you extend hookGet to other endpoints later,
-  // decide auth on a per-call basis.
+type HookGetResult =
+  | { ok: true; body: any }
+  | { ok: false; reason: 'unreachable' | 'http' | 'parse'; status?: number };
+
+/**
+ * GET against the local ICC server. Supports optional bearer auth and a
+ * configurable timeout. Used by health checks (unauthenticated, fast) and by
+ * /sync (authenticated, longer timeout).
+ */
+async function hookGetDetailed(
+  path: string,
+  opts: { token?: string | null; timeoutMs?: number } = {},
+): Promise<HookGetResult> {
   const { loadConfig, getTlsOptions, createIdentityVerifier } = await import('../src/config.ts');
   const config = loadConfig();
   const port = config.server.port;
@@ -583,30 +593,46 @@ async function hookGet(path: string): Promise<any> {
     ? (await import('node:https')).request
     : request;
 
-  return new Promise<any>((resolve) => {
+  const headers: Record<string, string> = {};
+  if (opts.token) headers['Authorization'] = `Bearer ${opts.token}`;
+
+  return new Promise<HookGetResult>((resolve) => {
     const req = requestFn({
       hostname: '127.0.0.1',
       port,
       path,
       method: 'GET',
-      timeout: 1000,
+      timeout: opts.timeoutMs ?? 1000,
+      headers,
       ...(tlsOpts ? { ...tlsOpts, checkServerIdentity: createIdentityVerifier(config.identity) } : {}),
     }, (res: any) => {
-      if (res.statusCode && (res.statusCode < 200 || res.statusCode >= 300)) {
+      const status = res.statusCode ?? 0;
+      if (status < 200 || status >= 300) {
         res.resume();
-        resolve(null);
+        resolve({ ok: false, reason: 'http', status });
         return;
       }
       let data = '';
       res.on('data', (chunk: string) => { data += chunk; });
       res.on('end', () => {
-        try { resolve(JSON.parse(data)); } catch { resolve(null); }
+        try { resolve({ ok: true, body: JSON.parse(data) }); }
+        catch { resolve({ ok: false, reason: 'parse', status }); }
       });
     });
-    req.on('error', () => resolve(null));
-    req.on('timeout', () => { req.destroy(); resolve(null); });
+    req.on('error', () => resolve({ ok: false, reason: 'unreachable' }));
+    req.on('timeout', () => { req.destroy(); resolve({ ok: false, reason: 'unreachable' }); });
     req.end();
   });
+}
+
+/**
+ * Back-compat wrapper: returns parsed JSON on success or null on any failure.
+ * Used by the SessionStart health pre-check, which only cares whether the
+ * server is alive.
+ */
+async function hookGet(path: string): Promise<any> {
+  const r = await hookGetDetailed(path);
+  return r.ok ? r.body : null;
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -633,11 +659,26 @@ interface SyncTarget {
 }
 
 async function hookSync(config: any): Promise<void> {
-  const payload: any = await hookGet('/setup/claude-code');
-  if (!payload) {
-    process.stdout.write('ICC: server not reachable. Run /mcp to reconnect, then /watch to activate.\n');
+  // /setup/claude-code requires auth after the initial setup token is consumed
+  // (see src/server.ts). Send the localToken and allow a longer timeout than
+  // the 1s SessionStart health-check default.
+  const token = config?.server?.localToken ?? null;
+  const result = await hookGetDetailed('/setup/claude-code', { token, timeoutMs: 5000 });
+  if (!result.ok) {
+    if (result.reason === 'unreachable') {
+      process.stdout.write('ICC: server not reachable. Run /mcp to reconnect, then /watch to activate.\n');
+    } else if (result.reason === 'http' && (result.status === 401 || result.status === 403)) {
+      process.stdout.write(
+        `ICC: sync failed — HTTP ${result.status} (auth rejected). Check server.localToken in ~/.icc/config.json.\n`,
+      );
+    } else if (result.reason === 'http') {
+      process.stdout.write(`ICC: sync failed — HTTP ${result.status}.\n`);
+    } else {
+      process.stdout.write('ICC: sync failed — invalid response from /setup/claude-code.\n');
+    }
     return;
   }
+  const payload: any = result.body;
   const {
     readManifest, writeManifest,
     hashJsonSubtree, hashFileContents, hashClaudeMdRegion,

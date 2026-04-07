@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { runHook, createTmpHome } from './helpers.ts';
 import { mkdirSync, writeFileSync, readFileSync, existsSync, chmodSync } from 'node:fs';
-import { join, dirname } from 'node:path';
+import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 
 // We can't use the in-process withServer + runHook together: runHook uses
@@ -263,10 +263,15 @@ function makeSyncPayload(version: string) {
   };
 }
 
-async function withSetupServer(payload: any, fn: (port: number) => Promise<void>): Promise<void> {
+async function withSetupServer(
+  payload: any,
+  fn: (port: number) => Promise<void>,
+  opts: { requireToken?: string } = {},
+): Promise<void> {
   const script = `
     const http = require('http');
     const PAYLOAD = ${JSON.stringify(payload)};
+    const REQUIRE_TOKEN = ${JSON.stringify(opts.requireToken ?? null)};
     const s = http.createServer((req, res) => {
       if (req.url === '/api/health') {
         res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -274,6 +279,12 @@ async function withSetupServer(payload: any, fn: (port: number) => Promise<void>
         return;
       }
       if (req.url === '/setup/claude-code') {
+        if (REQUIRE_TOKEN) {
+          const auth = req.headers['authorization'] || '';
+          if (auth !== 'Bearer ' + REQUIRE_TOKEN) {
+            res.writeHead(401); res.end(); return;
+          }
+        }
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify(PAYLOAD));
         return;
@@ -571,5 +582,38 @@ describe('hook sync (B11)', () => {
       const m = readManifestForTest(tmpHome);
       assert.equal(m.version, 'v2');
     });
+  });
+
+  it('10. sends bearer token from config.server.localToken to /setup/claude-code', async () => {
+    const { tmpHome, cleanup } = createTmpHome();
+    after(cleanup);
+    ensureClaudeDirs(tmpHome);
+    const payload = makeSyncPayload('v1');
+    await withSetupServer(payload, async (port) => {
+      const r = runSync({
+        HOME: tmpHome,
+        ICC_PORT: String(port),
+        ICC_LOCAL_TOKEN: 'secret-token-xyz',
+      });
+      assert.equal(r.status, 0, `stderr: ${r.stderr}`);
+      assert.match(r.stdout, /Applied \(6 files\)/);
+    }, { requireToken: 'secret-token-xyz' });
+  });
+
+  it('11. reports clear auth error when localToken is wrong', async () => {
+    const { tmpHome, cleanup } = createTmpHome();
+    after(cleanup);
+    ensureClaudeDirs(tmpHome);
+    const payload = makeSyncPayload('v1');
+    await withSetupServer(payload, async (port) => {
+      const r = runSync({
+        HOME: tmpHome,
+        ICC_PORT: String(port),
+        ICC_LOCAL_TOKEN: 'wrong-token',
+      });
+      assert.match(r.stdout, /HTTP 401 \(auth rejected\)/);
+      // Manifest must not be written on auth failure.
+      assert.equal(readManifestForTest(tmpHome), null);
+    }, { requireToken: 'secret-token-xyz' });
   });
 });
