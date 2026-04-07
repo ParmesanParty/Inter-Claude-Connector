@@ -4,7 +4,9 @@
 
 **Goal:** Remove the 591s cycling cap on the ICC mail watcher so it runs for the full session lifetime, exiting only on mail receipt, session end, or signal.
 
-**Architecture:** The watcher currently uses a three-layer timeout cascade (585s server / 591s process / 600s Bash tool) to stay under an assumed 600s hard limit on `run_in_background` tasks. Empirical testing (2026-04-05) proved no such limit exists. This plan strips the timer, adds SSE keepalive comments on the server long-poll to survive idle TCP timers, rewrites three tests that depend on the `--timeout` cycle flag to use SIGTERM-based shutdown instead, and removes all documentation references to cycling.
+**Architecture:** The watcher currently uses a three-layer timeout cascade (585s server / 591s process / 600s Bash tool) to stay under an assumed 600s hard limit on `run_in_background` tasks. Empirical testing (2026-04-05) proved no such limit exists. This plan strips the timer, enables TCP-level `SO_KEEPALIVE` on the server long-poll socket to survive idle TCP reapers (if any) without corrupting the JSON response body, rewrites three tests that depend on the `--timeout` cycle flag to use SIGTERM-based shutdown instead, and removes all documentation references to cycling.
+
+**Keepalive design note:** An earlier draft used SSE-style comment lines (`: keepalive\n\n`) written into the response body. This was rejected because `/api/watch` clients (the test suite's `httpJSON`, and `JSON.parse` downstream of `curl -sf`) read the entire body and parse it as a single JSON value — comment bytes before the JSON would break them. TCP-level keepalive via `socket.setKeepAlive(true, 30_000)` is invisible to the HTTP layer and solves the same idle-reaper problem at the kernel. If Tailscale/LAN-only deployments never hit idle reapers (plausible — we have no evidence they do), the TCP keepalive is cheap belt-and-braces.
 
 **Tech Stack:** Node.js, TypeScript, `node:test`, the existing ICC watcher architecture.
 
@@ -17,7 +19,7 @@
 **Modified files:**
 - `test/hook-heartbeat.test.ts` — rewrite 3 tests that depend on `--timeout` + `[ICC] Watcher cycled`; they will use SIGTERM shutdown like the existing test on line 91.
 - `bin/icc.ts` — remove `maxTimer`, remove `--timeout` flag parsing, remove `[ICC] Watcher cycled` output, remove force-exit comment block.
-- `src/server.ts` — remove `WATCH_TIMEOUT_MS` and its timer from `/api/watch`, add SSE keepalive comment interval, remove `--max-time 591` from docker watch/wake skill templates, update embedded CLAUDE.md instructions.
+- `src/server.ts` — remove `WATCH_TIMEOUT_MS` and its timer from `/api/watch`, enable `socket.setKeepAlive(true, 30_000)` on the long-poll connection, remove `--max-time 591` from docker watch/wake skill templates, update embedded CLAUDE.md instructions.
 - `~/.claude/CLAUDE.md` (user global) — remove cycled relaunch rule and cognitive pitfall paragraph.
 - `docs/claude-code-setup.md` — same removals as `~/.claude/CLAUDE.md`.
 - `memory/project_watcher_uncapped.md` (new) — short note about the architecture change, linked from `MEMORY.md`.
@@ -123,11 +125,11 @@ Replace with:
   });
 ```
 
-- [ ] **Step 4: Run tests to verify they fail against current code**
+- [ ] **Step 4: Verify rewritten tests pass against current code (refactor safety check)**
 
 Run: `node --test test/hook-heartbeat.test.ts`
 
-Expected: 3 tests FAIL because current `bin/icc.ts` still has the `--timeout` flag defaulted to 591s; the rewritten tests will spawn a watcher that doesn't self-exit, so the `SIGTERM` path will work — but one test may still pass coincidentally if timing aligns. The key assertion we expect to fail is: any test that reads stdout and finds `[ICC] Watcher cycled` in it still passes, but the new tests don't check for that string, so they should actually PASS against current code too. **Verify by running them now — both old and new code should satisfy the new tests.** If they pass, continue to Task 2.
+Expected: **all tests PASS.** The rewritten tests deliberately don't assert on `[ICC] Watcher cycled` or depend on `--timeout` self-exit, so they exercise the same heartbeat/PID/cleanup invariants under both the current cycling architecture and the post-Task-2 uncapped architecture. This is the refactor safety check: if they pass against unmodified `bin/icc.ts`, we know any failure after Task 2 is caused by the Task 2 changes, not the test rewrite. If any test fails here, stop and diagnose before proceeding.
 
 - [ ] **Step 5: Commit**
 
@@ -206,7 +208,11 @@ Replace lines 687-752 with:
           }
         }, interval);
       });
-      // Exit cleanly when the poll loop resolves (mail / PID death / signal).
+      // Force immediate exit on Promise resolve (mail receipt / PID death).
+      // SIGTERM/SIGINT already exit directly inside onSignal, so only the
+      // resolve paths reach here. The explicit exit prevents Node's event
+      // loop drain from keeping the process alive long enough for the
+      // model to launch a duplicate watcher before this one fully terminates.
       process.exit(0);
     }
 ```
@@ -227,18 +233,13 @@ Expected: All tests PASS. The SIGTERM-based tests still exercise the same cleanu
 
 Run: `node --test test/*.test.ts`
 
-Expected: All tests PASS. No other test should reference `[ICC] Watcher cycled` or the `--timeout` flag — verify with:
-
-```bash
-```
-
-Then use Grep:
+Expected: All tests PASS. Then verify no other test references the removed surface:
 
 ```
-Grep pattern: "Watcher cycled|--timeout" path: test glob: "*.test.ts"
+Grep pattern: "Watcher cycled|--timeout|WATCH_TIMEOUT|event.*timeout" path: test glob: "*.test.ts"
 ```
 
-Expected: no matches.
+Expected: no matches. If any test calls `httpJSON`/`httpRaw` against `/api/watch` and asserts `{event: 'timeout'}`, either remove the assertion or delete the test — the timeout event no longer exists.
 
 - [ ] **Step 4: Commit**
 
@@ -255,14 +256,14 @@ run_in_background tasks ignore the 600s timeout parameter, so the
 
 ---
 
-## Task 3: Strip `WATCH_TIMEOUT_MS` from server `/api/watch`, add SSE keepalive
+## Task 3: Strip `WATCH_TIMEOUT_MS` from server `/api/watch`, enable TCP keepalive
 
 **Files:**
 - Modify: `src/server.ts:1212-1275`
 
-Remove the 585s timer. Add a keepalive interval that writes `: keepalive\n\n` to the response every 30 seconds so idle-timeout TCP reapers at any network hop see traffic. SSE comment lines are ignored by EventSource parsers and by the existing ICC client (which only reads a single JSON response body), so the keepalive is transparent.
+Remove the 585s timer and the `{event: 'timeout'}` path. Enable OS-level TCP keepalive on the underlying socket so the kernel sends ACK probes on idle connections — this defeats idle-timeout reapers at intermediate network hops (if any exist) without putting any bytes into the HTTP response body. The response remains a single JSON value written via `sendJSON`, so `httpJSON` in the test suite and `JSON.parse(curl ...)` downstream continue to work unmodified.
 
-**Important**: the current `/api/watch` handler uses `sendJSON(res, 200, ...)` to write the response body and close the connection. With keepalive, we need to manually set headers and write the SSE comment stream until the final JSON event, then end the response.
+**Why not SSE comments?** An earlier draft wrote `: keepalive\n\n` into the response body every 30s. That corrupts the response for any client that `JSON.parse`s the full body (including `test/docker-endpoints.test.ts:275` via `httpJSON`). TCP keepalive is invisible to the HTTP layer and needs no client-side change.
 
 - [ ] **Step 1: Rewrite the `/api/watch` handler**
 
@@ -280,54 +281,46 @@ Replace lines 1212-1275 with:
         return;
       }
 
-      // Duplicate guard: check if a watcher is already connected for this session
-      if (sessionToken && activeWatchers.has(sessionToken)) {
-        sendJSON(res, 200, { event: 'duplicate' });
-        return;
-      }
-
-      // Reconnect session if token provided
+      // Duplicate guard: atomically check-and-reserve the session slot.
+      // Node's single-threaded model makes the check/set pair atomic as long
+      // as no await intervenes between them. A future refactor that adds an
+      // await here would reintroduce a TOCTOU race.
       if (sessionToken) {
+        if (activeWatchers.has(sessionToken)) {
+          sendJSON(res, 200, { event: 'duplicate' });
+          return;
+        }
+        activeWatchers.set(sessionToken, res);
         sessionReconnect(sessionToken);
       }
 
-      // Immediate inbox check — return immediately if unread messages exist
+      // Immediate inbox check — return immediately if unread messages exist.
+      // Release the reserved slot first so the next watcher can claim it.
       const unread = getUnread();
       const realUnread = unread.filter(m => !isReceipt(m));
       if (realUnread.length > 0) {
+        if (sessionToken) activeWatchers.delete(sessionToken);
         sendJSON(res, 200, { event: 'mail', unreadCount: realUnread.length });
         return;
       }
 
-      // Long-poll: block indefinitely until message arrives or client disconnects.
-      // No server-side timeout; the watcher lifetime is bounded only by the
-      // client process (icc hook watch) and its PID/signal monitoring.
+      // Long-poll: block indefinitely until a message arrives or the client
+      // disconnects. No server-side timeout; watcher lifetime is bounded
+      // only by the client process (icc hook watch) and its PID/signal
+      // monitoring.
       //
-      // SSE keepalive comments every 30s keep idle TCP timers from killing
-      // long-lived connections at intermediate hops. Clients that read a
-      // single JSON response (curl, the ICC watch command) ignore the
-      // comment lines because they appear before the JSON body.
-      //
-      // We must write headers manually — sendJSON sets Content-Length which
-      // is incompatible with a stream of keepalive bytes + final body.
-      res.writeHead(200, {
-        'Content-Type': 'application/json',
-        'Transfer-Encoding': 'chunked',
-        'Cache-Control': 'no-cache',
-        'Connection': 'keep-alive',
-      });
+      // Enable OS-level TCP keepalive so the kernel sends ACK probes on
+      // otherwise-idle connections. This defeats any idle-timeout reapers
+      // at intermediate network hops without touching the HTTP body, so
+      // clients that JSON.parse the full response keep working unchanged.
+      req.socket.setKeepAlive(true, 30_000);
 
-      if (sessionToken) {
-        activeWatchers.set(sessionToken, res);
-      }
-
-      const keepalive = setInterval(() => {
-        try { res.write(': keepalive\n\n'); } catch { /* connection gone */ }
-      }, 30_000);
-      keepalive.unref();
+      // Declare unsubscribe as a mutable binding BEFORE cleanup references
+      // it, to avoid a TDZ error if inboxSubscribe ever fires its callback
+      // synchronously during registration.
+      let unsubscribe: () => void = () => {};
 
       const cleanup = () => {
-        clearInterval(keepalive);
         if (sessionToken) {
           activeWatchers.delete(sessionToken);
           onWatcherDisconnect(sessionToken);
@@ -335,12 +328,10 @@ Replace lines 1212-1275 with:
         unsubscribe();
       };
 
-      const unsubscribe = inboxSubscribe((msg) => {
+      unsubscribe = inboxSubscribe((msg) => {
         if (isReceipt(msg)) return; // Don't wake on receipts
         cleanup();
-        try {
-          res.end(JSON.stringify({ event: 'mail', unreadCount: 1 }));
-        } catch { /* connection already closed */ }
+        sendJSON(res, 200, { event: 'mail', unreadCount: 1 });
       });
 
       // Connection close handler (client disconnect)
@@ -352,18 +343,22 @@ Replace lines 1212-1275 with:
     }
 ```
 
-Key changes:
+Key changes vs. current code:
 - `WATCH_TIMEOUT_MS` constant: **deleted**
-- `setTimeout` firing `{event: 'timeout'}`: **deleted**
-- `res.writeHead` with chunked transfer: **added**
-- `keepalive` interval: **added**
-- `unsubscribe` callback: uses `res.end(JSON.stringify(...))` instead of `sendJSON` because headers are already sent.
+- `setTimeout` firing `{event: 'timeout'}` and `timer.unref()`: **deleted**
+- `req.socket.setKeepAlive(true, 30_000)`: **added**
+- `sendJSON` retained for both mail and duplicate responses — no chunked-encoding surgery.
+- Duplicate-guard reservation moved to happen synchronously *before* any other await-capable code, closing a latent TOCTOU.
+
+**Behavior preserved — `sessionReconnect` ordering.** `sessionReconnect` clears grace/purgatory timers and promotes session state to ACTIVE (see `src/registry.ts:268`). The original code only called it *after* the duplicate-guard short-circuit, so a duplicate watcher never triggered a reconnect. The rewrite preserves that ordering exactly: `sessionReconnect` is inside the non-duplicate branch of the `if (sessionToken)` block. Do not hoist it above the duplicate check — doing so would let a second watcher's request clear timers belonging to the first, already-connected watcher.
 
 - [ ] **Step 2: Run the full test suite**
 
 Run: `node --test test/*.test.ts`
 
-Expected: All tests PASS. No test directly exercises `/api/watch` long-poll timeout (verify with):
+Expected: All tests PASS. **Hang-guard:** `test/docker-endpoints.test.ts:275` ("wakes on new inbox message") previously relied on the server's 585s timeout as an implicit fallback if `inboxSubscribe` wire-up regressed. With the timeout removed, a regression there would hang the suite indefinitely. If `node --test` does not already enforce a per-test timeout in this file, wrap that test with `{ timeout: 5000 }` (node:test supports `it(name, { timeout }, fn)`) so a broken wire-up fails fast.
+
+No test directly exercises `/api/watch` long-poll timeout (verify with):
 
 ```
 Grep pattern: "api/watch|WATCH_TIMEOUT" path: test glob: "*.test.ts"
@@ -390,6 +385,8 @@ killing idle connections. Pairs with uncapped watcher client."
 - Modify: `src/server.ts:603,686`
 
 The `/setup/claude-code` endpoint generates skill files for Docker-based ICC deployments. The `watch` and `wake` skills both include a curl command with `--max-time 591`. Remove the flag so the curl connection lives as long as the underlying HTTP response.
+
+> **Warning:** These strings live inside a backtick template literal. Preserve `${authHeader}`, `${localBaseUrl}`, and any other `${...}` interpolations exactly — they are real JavaScript expressions, not literal text. Only remove the `--max-time 591 ` substring (including the trailing space).
 
 - [ ] **Step 1: Edit the watch skill template (line 603)**
 
@@ -456,29 +453,7 @@ Each cycle actually runs its full ~591s. Don't investigate "rapid cycling"
 unless wall-clock timing confirms sub-second completion.
 ```
 
-With:
-
-```
-When the background watcher task completes, read its output and silently
-re-launch after handling:
-- If output contains \`[ICC] Mail received\`: call \`check_messages\` MCP
-  tool, then re-launch
-- Otherwise (connection dropped, process killed): silently re-launch
-Do not announce or comment on watcher restarts to the user.
-
-The watcher has no cycling timer — it runs for the full session and only
-exits on mail receipt, session end, or unexpected process death. If the
-\`icc hook check\` safety net emits \`[ICC] Watcher not running\` on a
-later prompt, re-launch unless the watcher is snoozed.
-
-If a watcher launch is denied by a hook or returns \`[ICC] Watcher already
-active\`, do nothing — another watcher is already handling this instance.
-
-Known limitation: \`/clear\` kills the watcher — the model loses the
-background task ID and can't receive the completion notification.
-Recovery is automatic: \`SessionStart clear\` hook re-fires startup, and
-\`icc hook check\` on the next prompt emits \`[ICC] Watcher not running\`.
-```
+With the canonical block from **Appendix A**, with each backtick escaped as `\`` because this block lives inside a JavaScript template literal. Do not hand-edit the wording — copy from Appendix A and apply only the backtick-escaping transform.
 
 - [ ] **Step 5: Run tests**
 
@@ -510,7 +485,7 @@ This file is a human-readable walkthrough that mirrors the embedded templates fr
 
 - [ ] **Step 1: Update the CLAUDE.md block (lines 212-229)**
 
-Replace the `When the background watcher task completes...` block through the `Cognitive pitfall:` paragraph with the same text used in Task 4 Step 4 (un-escaped — no `\`` needed since this is a plain markdown file).
+Replace the `When the background watcher task completes...` block through the `Cognitive pitfall:` paragraph with the canonical text from **Appendix A**, used verbatim (plain markdown, no escaping).
 
 - [ ] **Step 2: Update the watch skill block (lines 272-275)**
 
@@ -550,34 +525,23 @@ git commit -m "docs: update claude-code setup guide for uncapped watcher"
 ## Task 6: Update `~/.claude/CLAUDE.md` (user global)
 
 **Files:**
-- Modify: `~/.claude/CLAUDE.md:23-38`
+- Modify: `~/.claude/CLAUDE.md` (match by content, not line number)
 
 This is the live instruction block the root conversation reads on every session. It must be updated independently of the project repo because it is not tracked in this repository.
 
-- [ ] **Step 1: Apply the edit**
+> **Warning:** Do not use line numbers to anchor this edit. The user edits `~/.claude/CLAUDE.md` frequently and line numbers drift. Use the Edit tool with the surrounding content as `old_string` — specifically, match the block that starts with `When the background watcher task completes` and ends at the close of the `Cognitive pitfall:` paragraph (the blank line before the next `#` heading).
 
-Replace lines 23-38 with:
+- [ ] **Step 1: Read the file and locate the block**
 
-```markdown
-When the background watcher task completes, read its output and silently re-launch after handling:
-- If output contains `[ICC] Mail received`: call `check_messages` MCP tool, then re-launch
-- Otherwise (connection dropped, process killed): silently re-launch
-Do not announce or comment on watcher restarts to the user.
+Run Read on `~/.claude/CLAUDE.md` first to confirm the current content of the watcher instruction block. Then apply the Edit with the exact current text as `old_string`.
 
-The watcher has no cycling timer — it runs for the full session and only exits on mail receipt, session end, or unexpected process death. If the `icc hook check` safety net emits `[ICC] Watcher not running` on a later prompt, re-launch unless the watcher is snoozed.
+- [ ] **Step 2: Apply the edit**
 
-If a watcher launch is denied by a hook or returns `[ICC] Watcher already active`,
-do nothing — another watcher is already handling this instance. Do not retry.
+Replace the located block with the canonical text from **Appendix A**, used verbatim (no escaping).
 
-Known limitation: `/clear` kills the watcher — the model loses the background
-task ID and can't receive the completion notification. Recovery is automatic:
-`SessionStart clear` hook re-fires startup, and `icc hook check` on the next
-prompt emits `[ICC] Watcher not running`.
-```
+(Relative to the current content, this removes: "If output contains `[ICC] Watcher cycled`: just re-launch" line, and the entire "Cognitive pitfall" paragraph.)
 
-(Removes: "If output contains `[ICC] Watcher cycled`: just re-launch" line, and the entire "Cognitive pitfall" paragraph.)
-
-- [ ] **Step 2: No commit**
+- [ ] **Step 3: No commit**
 
 `~/.claude/CLAUDE.md` is not tracked in this repo. The change takes effect immediately for the current and future sessions.
 
@@ -608,7 +572,7 @@ As of 2026-04-06, the ICC mail watcher has no cycling timer.
 - The watcher exits only on: mail receipt (`[ICC] Mail received`), Claude Code PID death, or SIGTERM/SIGINT.
 - `[ICC] Watcher cycled` output no longer exists — do not look for it.
 - The `--timeout` flag on `icc hook watch` no longer exists.
-- `WATCH_TIMEOUT_MS` in `src/server.ts` is gone; `/api/watch` holds the connection with 30s SSE keepalive comments.
+- `WATCH_TIMEOUT_MS` in `src/server.ts` is gone; `/api/watch` holds the connection indefinitely, with OS-level TCP keepalive (`socket.setKeepAlive(true, 30_000)`) defeating any idle reapers. The response body is still a single JSON value written via `sendJSON` — do not add SSE comment lines, they break `httpJSON`/`JSON.parse` clients.
 - If the watcher dies unexpectedly, `icc hook check` (UserPromptSubmit/PostToolUse) emits `[ICC] Watcher not running` on the next prompt — that's the model's signal to relaunch.
 - Revert path if #11716 bites us: reintroduce a cycle at a much longer interval (e.g. 1 hour), not 10 minutes.
 ```
@@ -645,39 +609,110 @@ Grep pattern: "Watcher cycled|WATCH_TIMEOUT|--max-time 591|--timeout.*591" path:
 
 Expected: the only matches should be inside `docs/superpowers/specs/` and `docs/superpowers/plans/` (the design doc and this plan itself, which describe the pre-removal state).
 
-- [ ] **Step 3: Integration smoke test (manual)**
+- [ ] **Step 3a: Kick off um890 integration smoke test**
 
 On um890 (primary dev machine):
 
 1. Restart the ICC server: `systemctl --user restart icc-server`
 2. Launch a new Claude Code session in a scratch directory
-3. Run `/watch` to activate the watcher
+3. Run `/watch` to activate the watcher; record the `run_in_background` task ID
 4. Verify the watcher task is running: `TaskOutput block:false` on its ID
-5. Wait at least 15 minutes (well past the former 591s cycle)
-6. Verify the watcher is still running — no cycle notification in context, no relaunch occurred
-7. Send a test message from another host: `icc send --to um890/<instance> "test"` (or via `send_message` MCP tool from another session)
+5. **Record wall-clock start time** for the idle check
+
+Do NOT proceed to Step 3b until at least 15 wall-clock minutes have elapsed since Step 5. Interleave *unrelated* tasks during the wait — but do NOT run Step 3c (the restart-while-connected check) yet, because restarting the server would invalidate the idle-duration measurement.
+
+- [ ] **Step 3b: Verify um890 idle + mail + recovery checks**
+
+Once 15 wall-clock minutes have elapsed since Step 3a:
+
+6. Verify the watcher is still running — no cycle notification in context, no relaunch occurred, task still `running`
+7. Send a test message from another host via the `send_message` MCP tool (e.g. from a WSL2 session)
 8. Verify the watcher exits with `[ICC] Mail received`, the model handles the message, and the watcher is relaunched
 9. Kill the watcher manually: `kill $(cat ~/.icc/watcher.<instance>.pid)`
 10. Submit any prompt to the Claude Code session
 11. Verify `icc hook check` emits `[ICC] Watcher not running` and the model relaunches the watcher
 
-If all 11 checks pass, the implementation is complete.
+- [ ] **Step 3c: Restart-while-connected protocol check**
 
-- [ ] **Step 4: Deploy to peers**
+Run this *after* Step 3b completes so the idle-duration measurement in 3b is not contaminated. Task 3 retains `sendJSON` (no chunked encoding), so the wire protocol is unchanged, but verify explicitly:
 
-After um890 verification passes:
+1. With a watcher actively long-polling against um890's `icc-server`, run `systemctl --user restart icc-server` in a separate terminal
+2. Observe the background task output: the `curl`/watcher should exit with a connection drop (non-`Mail received` exit)
+3. Verify the model silently relaunches the watcher per the updated CLAUDE.md rule ("any non-mail exit → silent relaunch")
+4. Verify the new watcher registers against the restarted server (heartbeat file refreshes, `~/.icc/watcher.<instance>.pid` updated)
 
-```bash
-# rpi0
-ssh rpi0 'cd ~/code/inter-claude-connector && git pull && systemctl --user restart icc-server'
-# derp
-ssh derp 'cd /root/code/inter-claude-connector && git pull && systemctl --user restart icc-server'
-# rpi1 (docker)
-ssh rpi1 'cd ~/code/inter-claude-connector && git pull && docker compose up -d --build'
+If any step fails, stop and diagnose before deploying to peers — a protocol regression here will break every peer simultaneously.
+
+If all Step 3a/3b/3c checks pass, um890 is verified. Proceed to staged deploy.
+
+- [ ] **Step 4: Staged deploy — rpi0 first**
+
+Deploy to one peer first and verify cross-host watcher behavior before fanning out.
+
+**Preferred path: ICC-mediated deploy.** If a live Claude Code session exists on rpi0, send a message to it asking the peer instance to run `git pull && systemctl --user restart icc-server` locally. This honours the user's ICC-over-SSH preference and the ICC philosophy that peers control themselves.
+
+```
+send_message to=rpi0/<active-instance> body="[TOPIC: deploy] Please pull main and restart icc-server to pick up the uncapped watcher change. Reply when done." status=ACTION_NEEDED
 ```
 
-Note: This deployment uses direct SSH because ICC's `run_remote_command` is read-only by design. The user's preference for ICC-over-SSH applies to inspection commands, not deployment.
+**Fallback: direct SSH.** Only if no live rpi0 session is available:
 
-- [ ] **Step 5: Close out**
+```bash
+ssh rpi0 'cd ~/code/inter-claude-connector && git pull && systemctl --user restart icc-server'
+```
+
+Then from um890:
+1. Verify `ping_remote` against rpi0 still works
+2. If there is an active Claude Code session on rpi0, verify its watcher relaunched cleanly after the restart (check `~/.icc/watcher.<instance>.heartbeat` freshness on rpi0 via `read_remote_file`)
+3. Send a test message from um890 → rpi0 and verify delivery
+
+- [ ] **Step 5: Fan out to remaining peers**
+
+Only after rpi0 is verified. Apply the same ICC-first, SSH-fallback rule to each remaining peer. Only resort to SSH when no live peer session is available to execute the deploy locally.
+
+**Per-peer deploy command (to be executed by the peer instance, or over SSH if none is running):**
+
+- **derp (Hetzner VPS, runs as root):** `cd /root/code/inter-claude-connector && git pull && systemctl --user restart icc-server`
+- **rpi1 (docker):** `cd ~/code/inter-claude-connector && git pull && docker compose up -d --build`
+- **WSL2:** `cd ~/code/inter-claude-connector && git pull && systemctl --user restart icc-server`
+
+Track acknowledgements and verify with `ping_remote` after each deploy.
+
+- [ ] **Step 6: Close out**
 
 No final commit — all commits were made incrementally per task. Verify `git status` is clean and `git log --oneline -10` shows the expected sequence of 5 commits (Tasks 1, 2, 3, 4, 5).
+
+---
+
+## Task 9: (removed)
+
+Previously an optional keepalive regression test. Deleted along with the SSE-comment keepalive design — TCP-level `setKeepAlive` has no observable application-layer artifact to test, and integration-testing kernel TCP behavior is out of scope for this suite.
+
+---
+
+## Appendix A: Canonical watcher instruction block
+
+Tasks 4, 5, and 6 all rewrite the same block of watcher instructions in three different locations (the `src/server.ts` template literal, `docs/claude-code-setup.md`, and `~/.claude/CLAUDE.md`). To prevent drift, this appendix is the **single source of truth**. When executing Tasks 4/5/6, copy the text below verbatim, transforming only as noted per task.
+
+**Canonical text:**
+
+```markdown
+When the background watcher task completes, read its output and silently re-launch after handling:
+- If output contains `[ICC] Mail received`: call `check_messages` MCP tool, then re-launch
+- Otherwise (connection dropped, process killed): silently re-launch
+Do not announce or comment on watcher restarts to the user.
+
+The watcher has no cycling timer — it runs for the full session and only exits on mail receipt, session end, or unexpected process death. If the `icc hook check` safety net emits `[ICC] Watcher not running` on a later prompt, re-launch unless the watcher is snoozed.
+
+If a watcher launch is denied by a hook or returns `[ICC] Watcher already active`, do nothing — another watcher is already handling this instance. Do not retry.
+
+Known limitation: `/clear` kills the watcher — the model loses the background task ID and can't receive the completion notification. Recovery is automatic: `SessionStart clear` hook re-fires startup, and `icc hook check` on the next prompt emits `[ICC] Watcher not running`.
+```
+
+**Per-task transformations:**
+
+- **Task 4** (`src/server.ts` template literal): escape every backtick as `\``. No other changes.
+- **Task 5** (`docs/claude-code-setup.md`): use verbatim. No escaping.
+- **Task 6** (`~/.claude/CLAUDE.md`): use verbatim. No escaping.
+
+If a future edit needs to change the rules, update this appendix first, then propagate to Tasks 4/5/6. Any divergence between the three locations is a bug.
