@@ -31,7 +31,7 @@ docker compose pull
 docker compose up -d
 ```
 
-`parmesanparty/icc:latest` on Docker Hub is the canonical source. CI publishes a new multi-arch manifest on every merge to `main`, and on every `v*` git tag.
+`sitruss/icc:latest` on Docker Hub is the canonical source. CI publishes a new multi-arch manifest on every merge to `main`, and on every `v*` git tag.
 
 ## Non-goals
 
@@ -51,8 +51,8 @@ docker compose up -d
 
 | Trigger | Tags published |
 |---|---|
-| `push` to `main` | `parmesanparty/icc:latest`, `parmesanparty/icc:<short-sha>` |
-| `push` of tag `v*` (e.g. `v1.0.0`) | `parmesanparty/icc:<version>` (e.g. `1.0.0`, `1.0`, `1`), `parmesanparty/icc:latest` |
+| `push` to `main` | `sitruss/icc:latest`, `sitruss/icc:<short-sha>` |
+| `push` of tag `v*` (e.g. `v1.0.0`) | `sitruss/icc:<version>` (e.g. `1.0.0`, `1.0`, `1`), `sitruss/icc:latest` |
 
 The two trigger paths share one workflow. `docker/metadata-action@v5` handles tag derivation from refs:
 
@@ -77,7 +77,7 @@ Each build job:
 
 1. Checks out the repo
 2. Logs in to Docker Hub via `docker/login-action@v3` using `DOCKER_USERNAME` + `DOCKER_PASSWORD` secrets
-3. Builds the image with `docker/build-push-action@v6`, pushing to a **digest-only** ref (no human-readable tag yet) — `outputs: type=image,name=parmesanparty/icc,push-by-digest=true,name-canonical=true`
+3. Builds the image with `docker/build-push-action@v6`, pushing to a **digest-only** ref (no human-readable tag yet) — `outputs: type=image,name=sitruss/icc,push-by-digest=true,name-canonical=true`
 4. Exports the resulting digest as a job output
 
 Layer cache: `cache-from: type=gha` + `cache-to: type=gha,mode=max`. Per-platform cache scopes (`scope: build-${{ matrix.platform }}`).
@@ -96,7 +96,7 @@ The multi-arch tags (`:latest`, `:<short-sha>`, `:<semver>`) only appear on Dock
 
 Before the first workflow run, the repo owner must:
 
-1. Create a Docker Hub Personal Access Token (PAT) with `Read, Write, Delete` scope on the `parmesanparty/icc` repository
+1. Create a Docker Hub Personal Access Token (PAT) with `Read, Write, Delete` scope on the `sitruss/icc` repository
 2. Add two GitHub repository secrets:
    - `DOCKER_USERNAME` — Docker Hub username (`parmesanparty`)
    - `DOCKER_PASSWORD` — the PAT value
@@ -105,14 +105,14 @@ This is a one-time manual step. The implementation plan must call it out as a ch
 
 ### No code changes elsewhere
 
-`docker-compose.yml` already references `image: parmesanparty/icc:latest`. The workflow's job is purely to make sure that tag points at fresh bits.
+`docker-compose.yml` already references `image: sitruss/icc:latest`. The workflow's job is purely to make sure that tag points at fresh bits.
 
 ## Verification
 
 1. **First successful run on `main`:**
    - Both `build-amd64` and `build-arm64` jobs complete
    - `merge` job creates multi-arch manifest
-   - `docker manifest inspect parmesanparty/icc:latest` from any host shows both `linux/amd64` and `linux/arm64` entries with matching digests
+   - `docker manifest inspect sitruss/icc:latest` from any host shows both `linux/amd64` and `linux/arm64` entries with matching digests
 2. **End-to-end on rpi1:**
    - `docker compose pull` fetches the new manifest
    - `docker compose up -d` recreates the container with the new image

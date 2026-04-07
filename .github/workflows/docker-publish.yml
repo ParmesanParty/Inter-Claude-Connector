@@ -10,7 +10,7 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  IMAGE: parmesanparty/icc
+  IMAGE: sitruss/icc
 
 jobs:
   build:

@@ -1,6 +1,6 @@
 services:
   icc:
-    image: parmesanparty/icc:latest
+    image: sitruss/icc:latest
     # build: .  # uncomment to build locally
     container_name: icc
     restart: unless-stopped

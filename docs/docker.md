@@ -10,7 +10,7 @@ curl -O https://raw.githubusercontent.com/ParmesanParty/Inter-Claude-Connector/m
 docker compose up -d
 
 # Or directly
-docker run -d --name icc -p 3179:3179 -v icc-data:/home/icc/.icc parmesanparty/icc:latest
+docker run -d --name icc -p 3179:3179 -v icc-data:/home/icc/.icc sitruss/icc:latest
 ```
 
 Open http://localhost:3179 — the setup wizard will guide you through initialization.
@@ -270,7 +270,7 @@ To run this container as the mesh CA:
 ```yaml
 services:
   icc:
-    image: parmesanparty/icc:latest
+    image: sitruss/icc:latest
     ports:
       - "3179:3179"
       - "4179:4179"

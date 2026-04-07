@@ -66,7 +66,7 @@ Expected: at least one commit referencing C's work. Tasks 4, 9, 10 of this plan 
 
 - [ ] **Step 4: Confirm sub-project A has merged (for Task 15 verification)**
 
-Not blocking for Tasks 1–14, but Task 15 Step 3 assumes `parmesanparty/icc:latest` is pullable.
+Not blocking for Tasks 1–14, but Task 15 Step 3 assumes `sitruss/icc:latest` is pullable.
 
 ---
 

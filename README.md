@@ -88,7 +88,7 @@ systemctl --user start icc-server
 Run ICC with zero host dependencies:
 
 ```bash
-docker run -d --name icc -p 3179:3179 -v icc-data:/home/icc/.icc parmesanparty/icc:latest
+docker run -d --name icc -p 3179:3179 -v icc-data:/home/icc/.icc sitruss/icc:latest
 ```
 
 Open http://localhost:3179 to complete setup. See [docs/docker.md](docs/docker.md) for

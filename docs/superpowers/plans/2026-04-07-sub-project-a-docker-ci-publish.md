@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Add a GitHub Actions workflow that publishes `parmesanparty/icc` as a multi-arch Docker image (`linux/amd64` + `linux/arm64`) on every merge to `main` and on every `v*` git tag, so that rpi1 (and any future Docker peer) can update via `docker compose pull && docker compose up -d` with no local build step.
+**Goal:** Add a GitHub Actions workflow that publishes `sitruss/icc` as a multi-arch Docker image (`linux/amd64` + `linux/arm64`) on every merge to `main` and on every `v*` git tag, so that rpi1 (and any future Docker peer) can update via `docker compose pull && docker compose up -d` with no local build step.
 
 **Architecture:** Two parallel build jobs on GitHub-hosted native runners (`ubuntu-24.04` + `ubuntu-24.04-arm`) produce digest-only single-arch images via `docker/build-push-action`. A third `merge` job composes the digests into a multi-arch manifest under the human-readable tags derived by `docker/metadata-action`. Layer caching via `type=gha`. Authenticates to Docker Hub using `DOCKER_USERNAME` + `DOCKER_TOKEN` repo secrets.
 
@@ -16,9 +16,9 @@
 
 **Before the first workflow run succeeds, the user must:**
 
-1. Create a Docker Hub Personal Access Token (PAT) with `Read, Write, Delete` scope on the `parmesanparty/icc` repository (https://hub.docker.com/settings/security)
+1. Create a Docker Hub Personal Access Token (PAT) with `Read, Write, Delete` scope on the `sitruss/icc` repository (https://hub.docker.com/settings/security)
 2. Add two GitHub repository secrets (at https://github.com/ParmesanParty/Inter-Claude-Connector/settings/secrets/actions):
-   - `DOCKER_USERNAME` — `parmesanparty`
+   - `DOCKER_USERNAME` — `sitruss` (the Docker Hub account that owns the `sitruss/icc` repository)
    - `DOCKER_TOKEN` — the PAT value (named `DOCKER_TOKEN` rather than `DOCKER_PASSWORD` because it *is* a token — the plan originally used the misleading `DOCKER_PASSWORD` name to match `docker/login-action`'s `password:` field. The field name is the HTTP Basic auth password field, but the value we store is a PAT.)
 
 These are one-time manual steps. The implementation agent must pause and prompt the user to confirm before running the workflow end-to-end in Task 3.
@@ -31,7 +31,7 @@ These are one-time manual steps. The implementation agent must pause and prompt 
 |---|---|---|
 | `.github/workflows/docker-publish.yml` | Multi-arch build + publish workflow | Create |
 
-No code changes elsewhere. `docker-compose.yml` already references `image: parmesanparty/icc:latest`.
+No code changes elsewhere. `docker-compose.yml` already references `image: sitruss/icc:latest`.
 
 ---
 
@@ -77,7 +77,7 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  IMAGE: parmesanparty/icc
+  IMAGE: sitruss/icc
 
 jobs:
   build:
@@ -182,7 +182,7 @@ Expected: `OK`. If Python complains about YAML syntax, fix the file before commi
 git add .github/workflows/docker-publish.yml
 git commit -m "ci(docker): add multi-arch publish workflow for Docker Hub
 
-Publishes parmesanparty/icc on every push to main (as :latest + :<sha>)
+Publishes sitruss/icc on every push to main (as :latest + :<sha>)
 and on every v* tag (as semver tags). Parallel native builds on
 ubuntu-24.04 and ubuntu-24.04-arm runners; digest-only intermediates
 merged into a multi-arch manifest by a third job. Layer caching via
@@ -239,7 +239,7 @@ If it fails:
 - [ ] **Step 2: Verify the multi-arch manifest on Docker Hub**
 
 ```bash
-docker buildx imagetools inspect parmesanparty/icc:latest
+docker buildx imagetools inspect sitruss/icc:latest
 ```
 
 Expected: two platforms listed (`linux/amd64` and `linux/arm64`), each with a matching SHA256 digest.
@@ -252,7 +252,7 @@ Use the ICC MCP tool `send_message` to ask rpi1 to run the new pull flow. Send:
 to: rpi1/inter-claude-connector
 status: ACTION_NEEDED
 body: [TOPIC: docker-ci-verify] The new GH Actions workflow just
-published parmesanparty/icc:latest. Please run
+published sitruss/icc:latest. Please run
 `docker compose pull && docker compose up -d` from your ICC project
 directory and confirm: (1) the pull fetches the new image (check image
 ID changes), (2) the container comes up healthy via
@@ -306,7 +306,7 @@ Expected: another successful run.
 - [ ] **Step 3: Verify semver tags appeared on Docker Hub**
 
 ```bash
-docker buildx imagetools inspect parmesanparty/icc:0.0.0-citest
+docker buildx imagetools inspect sitruss/icc:0.0.0-citest
 ```
 
 Expected: manifest with both platforms.
@@ -320,7 +320,7 @@ git push origin :refs/tags/v0.0.0-citest
 
 - [ ] **Step 5: Delete the throwaway tag on Docker Hub**
 
-Use the Docker Hub web UI: https://hub.docker.com/r/parmesanparty/icc/tags — find `0.0.0-citest`, click Delete. (The API path exists but shell-quoting a PAT inside nested curl heredocs is fragile if the PAT contains `$` or backticks. The web UI is one click; use it.)
+Use the Docker Hub web UI: https://hub.docker.com/r/sitruss/icc/tags — find `0.0.0-citest`, click Delete. (The API path exists but shell-quoting a PAT inside nested curl heredocs is fragile if the PAT contains `$` or backticks. The web UI is one click; use it.)
 
 ---
 
