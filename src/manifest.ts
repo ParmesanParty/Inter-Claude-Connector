@@ -127,3 +127,89 @@ export function wrapClaudeMdWithMarkers(inner: string): string {
   const body = inner.endsWith('\n') ? inner : inner + '\n';
   return `${ICC_MARKER_BEGIN}\n${body}${ICC_MARKER_END}`;
 }
+
+/**
+ * Canonical ICC H1 headings. Matched EXACTLY (after trim) — non-canonical
+ * variants (H2+, renamed, etc.) fall through to the fuzzy second pass.
+ */
+const ICC_CANONICAL_HEADINGS = [
+  '# ICC Inbox',
+  '# ICC Activation & Mail Watcher',
+  '# ICC Config Drift',
+];
+
+const FUZZY_ICC_HEADING = /^#{1,6}\s+ICC\b/i;
+const NON_ICC_H1 = /^#\s+(?!ICC\b)/;
+
+/**
+ * Migrate CLAUDE.md to the marker convention during a /sync. Four cases:
+ *
+ * 1. Markers already present → replace the inner region.
+ * 2. No markers but canonical ICC H1 headings present → replace the
+ *    contiguous ICC region (first canonical heading → end-of-file OR next
+ *    non-ICC H1) with the wrapped marker block.
+ * 3. No markers, no canonical headings, but a fuzzy ICC-ish heading
+ *    (H2+, any level) → append the wrapped block to end-of-file AND
+ *    print a stderr warning so the user knows to clean up.
+ * 4. No ICC content at all → append the wrapped block to end-of-file
+ *    with no warning.
+ *
+ * Returns the full new file contents. Caller writes atomically.
+ */
+export function migrateClaudeMd(existing: string, newInner: string): string {
+  // Case 1: markers already present — replace region
+  if (existing.match(/<!--\s*ICC:BEGIN[^>]*-->/)) {
+    const wrapped = wrapClaudeMdWithMarkers(newInner);
+    return existing.replace(
+      /<!--\s*ICC:BEGIN[^>]*-->[\s\S]*?<!--\s*ICC:END\s*-->/,
+      wrapped,
+    );
+  }
+
+  const lines = existing.split('\n');
+
+  // Case 2: scan for the first canonical ICC H1
+  let firstIccIdx = -1;
+  for (let i = 0; i < lines.length; i++) {
+    const trimmed = lines[i]!.trim();
+    if (ICC_CANONICAL_HEADINGS.includes(trimmed)) {
+      firstIccIdx = i;
+      break;
+    }
+  }
+
+  if (firstIccIdx !== -1) {
+    // Found canonical heading — find end of contiguous ICC region
+    let lastIccIdx = lines.length - 1;
+    for (let i = firstIccIdx + 1; i < lines.length; i++) {
+      if (NON_ICC_H1.test(lines[i]!)) {
+        lastIccIdx = i - 1;
+        break;
+      }
+    }
+    const before = lines.slice(0, firstIccIdx);
+    const after = lines.slice(lastIccIdx + 1);
+    const wrapped = wrapClaudeMdWithMarkers(newInner);
+    while (before.length > 0 && before[before.length - 1]!.trim() === '') before.pop();
+    while (after.length > 0 && after[0]!.trim() === '') after.shift();
+    const parts: string[] = [];
+    if (before.length > 0) parts.push(before.join('\n'));
+    parts.push(wrapped);
+    if (after.length > 0) parts.push(after.join('\n'));
+    return parts.join('\n\n');
+  }
+
+  // Case 3: fuzzy second pass — any ICC-ish heading at any level?
+  const hasFuzzyIcc = lines.some((l) => FUZZY_ICC_HEADING.test(l));
+  const wrapped = wrapClaudeMdWithMarkers(newInner);
+  if (hasFuzzyIcc) {
+    process.stderr.write(
+      '[ICC] Possible ICC content detected outside marker region — please remove old content manually if duplicated.\n',
+    );
+  }
+
+  // Case 4 (also the tail of case 3): append the wrapped block
+  if (existing.trim() === '') return wrapped;
+  const sep = existing.endsWith('\n') ? '\n' : '\n\n';
+  return existing + sep + wrapped;
+}

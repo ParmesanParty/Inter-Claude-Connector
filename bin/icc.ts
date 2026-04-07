@@ -640,8 +640,8 @@ async function hookSync(config: any): Promise<void> {
   }
   const {
     readManifest, writeManifest,
-    hashJsonSubtree, hashFileContents, hashClaudeMdRegion, extractClaudeMdRegion,
-    wrapClaudeMdWithMarkers,
+    hashJsonSubtree, hashFileContents, hashClaudeMdRegion,
+    migrateClaudeMd,
   } = await import('../src/manifest.ts');
   const path = await import('node:path');
 
@@ -738,19 +738,7 @@ async function hookSync(config: any): Promise<void> {
       apply: () => {
         let cur = '';
         try { cur = readFileSync(filePath, 'utf8'); } catch { cur = ''; }
-        const wrapped = wrapClaudeMdWithMarkers(payload.claudeMd.content);
-        let next: string;
-        if (extractClaudeMdRegion(cur) !== null) {
-          // Replace existing region
-          next = cur.replace(
-            /<!--\s*ICC:BEGIN[^>]*-->[\s\S]*?<!--\s*ICC:END\s*-->/,
-            wrapped,
-          );
-        } else {
-          // Append (B12 will replace this with smarter migration)
-          const sep = cur.length === 0 || cur.endsWith('\n') ? '' : '\n';
-          next = cur + sep + (cur.length > 0 ? '\n' : '') + wrapped + '\n';
-        }
+        const next = migrateClaudeMd(cur, payload.claudeMd.content);
         mkdirSync(path.dirname(filePath), { recursive: true });
         const tmp = `${filePath}.tmp.${process.pid}.${Date.now()}`;
         writeFileSync(tmp, next);

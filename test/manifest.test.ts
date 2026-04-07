@@ -13,6 +13,7 @@ import {
   extractClaudeMdRegion,
   hashClaudeMdRegion,
   wrapClaudeMdWithMarkers,
+  migrateClaudeMd,
   type AppliedConfigManifest,
 } from '../src/manifest.ts';
 
@@ -141,4 +142,112 @@ test('hashClaudeMdRegion returns null when markers absent', () => {
 test('hashFileContents returns 64-char hex', () => {
   const h = hashFileContents('some content');
   assert.match(h, /^[0-9a-f]{64}$/);
+});
+
+const NEW_INNER = '# ICC Inbox\n\nNew inbox rules here.';
+
+test('migrateClaudeMd: replaces inner when markers already present', () => {
+  const existing = `# Preamble\n\n<!-- ICC:BEGIN -->\n# Old ICC\nold stuff\n<!-- ICC:END -->\n\n# Postamble`;
+  const result = migrateClaudeMd(existing, NEW_INNER);
+  assert.ok(result.includes('# Preamble'));
+  assert.ok(result.includes('# Postamble'));
+  assert.ok(!result.includes('old stuff'));
+  assert.ok(result.includes('New inbox rules here.'));
+  assert.ok(result.includes(ICC_MARKER_BEGIN));
+  assert.ok(result.includes(ICC_MARKER_END));
+});
+
+test('migrateClaudeMd: replaces ICC H1 region when markers absent but canonical headings present', () => {
+  const existing = `# Preamble\n\nSome intro.\n\n# ICC Inbox\n\nOld content.\n\n# ICC Activation & Mail Watcher\n\nOld watcher content.`;
+  const result = migrateClaudeMd(existing, NEW_INNER);
+  assert.ok(result.includes('# Preamble'));
+  assert.ok(result.includes('Some intro.'));
+  assert.ok(!result.includes('Old content.'));
+  assert.ok(!result.includes('Old watcher content.'));
+  assert.ok(result.includes('New inbox rules here.'));
+  assert.ok(result.includes(ICC_MARKER_BEGIN));
+  const extracted = extractClaudeMdRegion(result);
+  assert.ok(extracted);
+  assert.ok(extracted!.includes('New inbox rules here.'));
+});
+
+test('migrateClaudeMd: preserves non-ICC H1 sections that follow the ICC region', () => {
+  const existing = `# Intro\n\n# ICC Inbox\n\nold inbox\n\n# My Other Section\n\nmine.`;
+  const result = migrateClaudeMd(existing, NEW_INNER);
+  assert.ok(result.includes('# Intro'));
+  assert.ok(result.includes('# My Other Section'));
+  assert.ok(result.includes('mine.'));
+  assert.ok(!result.includes('old inbox'));
+  assert.ok(result.includes('New inbox rules here.'));
+});
+
+test('migrateClaudeMd: appends wrapped block with warning when ICC-ish non-canonical heading is present', () => {
+  const origWrite = process.stderr.write.bind(process.stderr);
+  const captured: string[] = [];
+  (process.stderr as any).write = (s: string | Buffer) => {
+    captured.push(String(s));
+    return true;
+  };
+  try {
+    const existing = `# My Doc\n\n## ICC Inbox\n\nsomething.`;
+    const result = migrateClaudeMd(existing, NEW_INNER);
+    assert.ok(result.includes('## ICC Inbox'));
+    assert.ok(result.includes('something.'));
+    assert.ok(result.includes(ICC_MARKER_BEGIN));
+    assert.ok(result.includes('New inbox rules here.'));
+    assert.ok(captured.some((line) => line.includes('Possible ICC content detected')));
+  } finally {
+    (process.stderr as any).write = origWrite;
+  }
+});
+
+test('migrateClaudeMd: appends wrapped block with no warning when file has no ICC content', () => {
+  const origWrite = process.stderr.write.bind(process.stderr);
+  const captured: string[] = [];
+  (process.stderr as any).write = (s: string | Buffer) => {
+    captured.push(String(s));
+    return true;
+  };
+  try {
+    const existing = `# My Doc\n\nNothing ICC-related here.`;
+    const result = migrateClaudeMd(existing, NEW_INNER);
+    assert.ok(result.includes('# My Doc'));
+    assert.ok(result.includes('Nothing ICC-related here.'));
+    assert.ok(result.includes(ICC_MARKER_BEGIN));
+    assert.ok(result.includes('New inbox rules here.'));
+    assert.ok(!captured.some((line) => line.includes('Possible ICC content')));
+  } finally {
+    (process.stderr as any).write = origWrite;
+  }
+});
+
+test('migrateClaudeMd: creates content from scratch when file is empty', () => {
+  const result = migrateClaudeMd('', NEW_INNER);
+  assert.ok(result.includes(ICC_MARKER_BEGIN));
+  assert.ok(result.includes(ICC_MARKER_END));
+  assert.ok(result.includes('New inbox rules here.'));
+});
+
+test('migrateClaudeMd: is idempotent — migrate(migrate(x)) === migrate(x)', () => {
+  const existing = `# Preamble\n\nstuff.`;
+  const once = migrateClaudeMd(existing, NEW_INNER);
+  const twice = migrateClaudeMd(once, NEW_INNER);
+  assert.equal(extractClaudeMdRegion(once), extractClaudeMdRegion(twice));
+  const beginMatches = (twice.match(/<!-- ICC:BEGIN/g) || []).length;
+  const endMatches = (twice.match(/<!-- ICC:END/g) || []).length;
+  assert.equal(beginMatches, 1);
+  assert.equal(endMatches, 1);
+});
+
+test('migrateClaudeMd: preserves H2 ICC headings without replacement (fuzzy fall-through)', () => {
+  const origWrite = process.stderr.write.bind(process.stderr);
+  (process.stderr as any).write = () => true;
+  try {
+    const existing = `## ICC Inbox\n\nH2 not H1.`;
+    const result = migrateClaudeMd(existing, NEW_INNER);
+    assert.ok(result.includes('## ICC Inbox'));
+    assert.ok(result.includes('H2 not H1.'));
+  } finally {
+    (process.stderr as any).write = origWrite;
+  }
 });
