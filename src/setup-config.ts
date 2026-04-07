@@ -365,7 +365,28 @@ The applied-config manifest is stored INSIDE the ICC container at \`/home/icc/.i
    SERVER_HASH=$(printf '%s' "$SERVER" | sha256sum | awk '{print $1}')
    STORED_HASH=$(echo "$STORED_MANIFEST" | jq -r '.files["~/.claude.json"].hash // ""' 2>/dev/null || echo "")
    \`\`\`
-   Apply the analogous pattern for \`~/.claude/settings.json\` (subtree: \`.hooks\`), the CLAUDE.md marker region, and each skill file.
+
+   For \`~/.claude/settings.json\`, the same pattern applies on the \`.hooks\` subtree (use \`.hooks.config\` from the fetched payload as the server side).
+
+   For \`~/.claude/CLAUDE.md\`, the "owned region" is the content **between** \`<!-- ICC:BEGIN -->\` and \`<!-- ICC:END -->\` — **EXCLUSIVE of the marker lines themselves**. This matches \`hashClaudeMdRegion\` in \`src/manifest.ts\` and the case-1 awk replacement in step 9. Worked example:
+   \`\`\`bash
+   # Extract the inner region (exclusive of marker lines), trim leading/trailing blanks
+   LOCAL_INNER=$(awk '/<!-- ICC:BEGIN/{flag=1; next} /<!-- ICC:END/{flag=0} flag' ~/.claude/CLAUDE.md 2>/dev/null | sed -e :a -e '/^$/{$d;N;ba' -e '}' | sed -e :a -e '/^$/{N;ba' -e '}' || echo '')
+   LOCAL_HASH=$(printf '%s' "$LOCAL_INNER" | sha256sum | awk '{print $1}')
+   # Server side: jq returns the canonical inner content already
+   SERVER=$(jq -r '.claudeMd.content' /tmp/icc-setup-fetch.json)
+   SERVER_HASH=$(printf '%s' "$SERVER" | sha256sum | awk '{print $1}')
+   STORED_HASH=$(echo "$STORED_MANIFEST" | jq -r '.files["~/.claude/CLAUDE.md"].hash // ""' 2>/dev/null || echo "")
+   \`\`\`
+   On first sync (no markers in the file yet) the awk extraction returns empty, so \`LOCAL_HASH\` is the SHA-256 of the empty string — unique and distinct from \`SERVER_HASH\`, so the file classifies as \`clean-update\` correctly.
+
+   For each skill file under \`~/.claude/skills/\`, the owned region is the WHOLE file (we wrote it from scratch). Just \`sha256sum\` the file directly:
+   \`\`\`bash
+   LOCAL_HASH=$(sha256sum ~/.claude/skills/watch/SKILL.md 2>/dev/null | awk '{print $1}' || echo "")
+   SERVER_HASH=$(jq -r '.skills.watch.content' /tmp/icc-setup-fetch.json | sha256sum | awk '{print $1}')
+   STORED_HASH=$(echo "$STORED_MANIFEST" | jq -r '.files["~/.claude/skills/watch/SKILL.md"].hash // ""' 2>/dev/null || echo "")
+   \`\`\`
+   Repeat for snooze, wake, sync.
 
 6. **Classify each file** based on the three hashes:
    - \`local == server\` → **unchanged** (no-op)
