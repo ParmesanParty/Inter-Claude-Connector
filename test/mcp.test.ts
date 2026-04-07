@@ -22,6 +22,56 @@ describe('MCP Server creation', () => {
   });
 });
 
+describe('MCP schema: body field aliases', () => {
+  // LLMs frequently reach for `message`/`text`/`content` because those are
+  // the conventional field names in most chat/messaging APIs. The schema
+  // preprocesses these into `body` before validation so the call succeeds.
+  const getSchema = (toolName: string) => {
+    const { server } = createMCPServer();
+    const tool = (server as any)._registeredTools[toolName];
+    return tool.inputSchema;
+  };
+
+  it('send_message accepts "message" as alias for "body"', () => {
+    const schema = getSchema('send_message');
+    const parsed = schema.parse({ message: 'hello', to: 'host/inst' });
+    assert.equal(parsed.body, 'hello');
+    assert.equal((parsed as any).message, undefined, 'alias key stripped');
+  });
+
+  it('send_message accepts "text" as alias for "body"', () => {
+    const schema = getSchema('send_message');
+    const parsed = schema.parse({ text: 'hello' });
+    assert.equal(parsed.body, 'hello');
+  });
+
+  it('send_message accepts "content" as alias for "body"', () => {
+    const schema = getSchema('send_message');
+    const parsed = schema.parse({ content: 'hello' });
+    assert.equal(parsed.body, 'hello');
+  });
+
+  it('send_message prefers "body" when both are provided (no silent overwrite)', () => {
+    const schema = getSchema('send_message');
+    const parsed = schema.parse({ body: 'real', message: 'ignored' });
+    assert.equal(parsed.body, 'real');
+  });
+
+  it('respond_to_message accepts "message" as alias for "body"', () => {
+    const schema = getSchema('respond_to_message');
+    const parsed = schema.parse({ messageId: 'abc12345', message: 'reply!' });
+    assert.equal(parsed.body, 'reply!');
+  });
+
+  it('respond_to_message still requires body-or-alias', () => {
+    const schema = getSchema('respond_to_message');
+    assert.throws(
+      () => schema.parse({ messageId: 'abc12345' }),
+      /body/i,
+    );
+  });
+});
+
 describe('MCP tool: ping_remote', () => {
   it('returns latency on success', async () => {
     const mockClient = {
@@ -114,7 +164,7 @@ describe('MCP tool: sendMessage routing', () => {
     // peer resolution which with 0 peers returns null → sends locally
     const { peerFn, localFn, calls } = createMockAPIs();
     const handlers = createToolHandlers({} as unknown as ICCClient, peerFn, localFn);
-    const result = await handlers.sendMessage({ body: 'hello' });
+    await handlers.sendMessage({ body: 'hello' });
     // With 0 peers, resolves to local
     assert.equal(calls.local.length, 1);
   });
@@ -122,9 +172,9 @@ describe('MCP tool: sendMessage routing', () => {
 
 describe('MCP tool: respondToMessage routing', () => {
   it('routes reply to localAPI when original sender is local', async () => {
-    const { peerFn, localFn, calls } = createMockAPIs();
+    const { peerFn, calls } = createMockAPIs();
     const lookupCalls: { method: string; path: string }[] = [];
-    const smartLocalFn = async (method: string, path: string, body?: any) => {
+    const smartLocalFn = async (method: string, path: string, _body?: any) => {
       lookupCalls.push({ method, path });
       if (method === 'GET' && path.startsWith('/api/inbox/')) {
         return { message: { from: 'test-host/other-instance', body: 'original' } };
@@ -144,7 +194,7 @@ describe('MCP tool: respondToMessage routing', () => {
   });
 
   it('routes reply to peerAPI when original sender is remote', async () => {
-    const { peerFn, localFn, calls } = createMockAPIs();
+    const { peerFn, calls } = createMockAPIs();
     const localCalls: { method: string; path: string }[] = [];
     const smartLocalFn = async (method: string, path: string, _body?: any) => {
       localCalls.push({ method, path });

@@ -12,6 +12,26 @@ import type { ICCConfig } from './types.ts';
 
 const log = createLogger('mcp');
 
+/**
+ * Zod preprocess that accepts common aliases for the `body` field.
+ * LLMs often reach for `message`/`text`/`content` on the first call because
+ * that's what most chat APIs use. We accept those and rewrite to `body`
+ * before validation so the call succeeds. If `body` is already present, the
+ * alias is ignored (no silent overwrite).
+ */
+const aliasBody = (val: unknown): unknown => {
+  if (!val || typeof val !== 'object' || Array.isArray(val)) return val;
+  const obj = val as Record<string, unknown>;
+  if (typeof obj.body === 'string') return obj;
+  for (const alias of ['message', 'text', 'content'] as const) {
+    if (typeof obj[alias] === 'string') {
+      const { [alias]: aliased, ...rest } = obj;
+      return { ...rest, body: aliased };
+    }
+  }
+  return obj;
+};
+
 interface MCPToolResult {
   // Index signature required by MCP SDK's ToolCallback return type
   [x: string]: unknown;
@@ -657,12 +677,12 @@ export function createMCPServer() {
     'send_message',
     {
       description: 'Send a message to an ICC inbox. Messages persist until the recipient reads them. Address format: "{host}/{instance}" (e.g. "laptop/myapp"). If the "to" address matches the local host, the message is delivered locally; otherwise it\'s routed to the appropriate peer. Omitting "to" sends to the default peer (if only one is configured). Pass an array for multicast to multiple recipients.',
-      inputSchema: z.object({
-        body: z.string().describe('The message content'),
+      inputSchema: z.preprocess(aliasBody, z.object({
+        body: z.string().describe('The message body text. Field name is "body" (not "message", "text", or "content"). Aliases are accepted server-side but prefer "body".'),
         replyTo: z.string().optional().describe('ID of a message to reply to (for threading)'),
         to: z.union([z.string(), z.array(z.string()).min(2)]).optional().describe('Target address(es). Single string or array for multicast (e.g. ["laptop/app", "server/app"]).'),
         status: z.enum(['WAITING_FOR_REPLY', 'FYI_ONLY', 'ACTION_NEEDED', 'RESOLVED']).optional().describe('Message status. Use instead of [STATUS: ...] in body text. WAITING_FOR_REPLY = expecting a response, FYI_ONLY = informational, ACTION_NEEDED = recipient should act, RESOLVED = issue closed.'),
-      }),
+      })),
     },
     (args) => handlers.sendMessage(args)
   );
@@ -683,12 +703,12 @@ export function createMCPServer() {
     'respond_to_message',
     {
       description: 'Send a reply to a specific message. The reply is automatically routed back to the sender\'s host. Supports prefix matching — you can use the first 8+ characters of a message ID instead of the full UUID. Use replyAll to respond to all participants in a multicast thread.',
-      inputSchema: z.object({
+      inputSchema: z.preprocess(aliasBody, z.object({
         messageId: z.string().describe('Full message ID or unique prefix (8+ characters). The sender address is looked up from the original message to route the reply.'),
-        body: z.string().describe('The reply content'),
+        body: z.string().describe('The reply body text. Field name is "body" (not "message", "text", or "content"). Aliases are accepted server-side but prefer "body".'),
         replyAll: z.boolean().optional().describe('Reply to sender AND all other recipients in the thread. Default: sender only.'),
         status: z.enum(['WAITING_FOR_REPLY', 'FYI_ONLY', 'ACTION_NEEDED', 'RESOLVED']).optional().describe('Message status. Use instead of [STATUS: ...] in body text.'),
-      }),
+      })),
     },
     (args) => handlers.respondToMessage(args)
   );
