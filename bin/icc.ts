@@ -685,7 +685,6 @@ async function hook() {
       }
 
       const interval = parseInt((flags.interval as string) || '5', 10) * 1000;
-      const timeout = parseInt((flags.timeout as string) || '591', 10) * 1000;
       const monitorPid = flags.pid
         ? parseInt(flags.pid as string, 10)
         : getClaudeCodePid();
@@ -723,7 +722,6 @@ async function hook() {
             } catch {
               cleanup();
               clearInterval(poll);
-              clearTimeout(maxTimer);
               resolve();
               return;
             }
@@ -734,21 +732,15 @@ async function hook() {
             cleanup();
             process.stdout.write(`[ICC] Mail received\n${signal}\n`);
             clearInterval(poll);
-            clearTimeout(maxTimer);
             resolve();
           }
         }, interval);
-
-        const maxTimer = setTimeout(() => {
-          cleanup();
-          clearInterval(poll);
-          process.stdout.write('[ICC] Watcher cycled\n');
-          resolve();
-        }, timeout);
       });
-      // Force immediate exit — prevents node's event loop drain from
-      // keeping the process alive long enough for a duplicate watcher
-      // to launch before this one fully terminates.
+      // Force immediate exit on Promise resolve (mail receipt / PID death).
+      // SIGTERM/SIGINT already exit directly inside onSignal, so only the
+      // resolve paths reach here. The explicit exit prevents Node's event
+      // loop drain from keeping the process alive long enough for the
+      // model to launch a duplicate watcher before this one fully terminates.
       process.exit(0);
     }
 

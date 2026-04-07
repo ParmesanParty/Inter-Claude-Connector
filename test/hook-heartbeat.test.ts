@@ -101,8 +101,7 @@ describe('Heartbeat: PID monitoring', () => {
   afterEach(() => { tmp.cleanup(); });
 
   it('watch exits when monitored PID does not exist', () => {
-    const stdout = runHook('watch', { HOME: tmp.tmpHome }, ['--pid', '999999', '--interval', '1']);
-    assert.ok(!stdout.includes('[ICC] Watcher cycled'), 'should exit before timeout');
+    runHook('watch', { HOME: tmp.tmpHome }, ['--pid', '999999', '--interval', '1']);
     const files = readdirSync(join(tmp.tmpHome, '.icc'));
     const watcherFiles = files.filter(f => f.startsWith('watcher.'));
     assert.equal(watcherFiles.length, 0, 'should clean up files on PID death exit');
