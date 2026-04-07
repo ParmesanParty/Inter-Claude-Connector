@@ -318,14 +318,16 @@ The applied-config manifest is stored at \`~/.icc/applied-config-manifest.<IDENT
    \`\`\`
    If this fails, stop and tell the user the server is unreachable.
 
-2. **Extract identity and manifest path.** The host identity is not in the setup payload — read it from the local ICC config:
+2. **Extract identity and manifest path.** The host identity is in the setup payload itself (the server bakes it in at template-emission time), so the host filesystem needs no pre-existing ICC state:
    \`\`\`bash
-   IDENTITY=$(jq -r .identity ~/.icc/config.json)
+   IDENTITY=$(jq -r .identity /tmp/icc-setup-fetch.json)
    MANIFEST="$HOME/.icc/applied-config-manifest.$IDENTITY.json"
    VERSION=$(jq -r .version /tmp/icc-setup-fetch.json)
+   mkdir -p "$HOME/.icc"
    echo "server version: $VERSION"
    echo "manifest path: $MANIFEST"
    \`\`\`
+   On Docker hosts, \`$HOME/.icc/\` does not normally exist (the container has its own state at \`/home/icc/.icc/\` inside the volume). The \`mkdir\` above creates it on the host JUST to hold the manifest file — that single file is the only host-side ICC state /sync needs.
 
 3. **Read the stored manifest** (may not exist on first sync):
    \`\`\`bash
@@ -377,7 +379,52 @@ The applied-config manifest is stored at \`~/.icc/applied-config-manifest.<IDENT
      jq --argjson new "$NEW" '.hooks = $new' ~/.claude/settings.json > ~/.claude/settings.json.tmp && mv ~/.claude/settings.json.tmp ~/.claude/settings.json
      \`\`\`
 
-   - **\`~/.claude/CLAUDE.md\`** — replace the region between \`<!-- ICC:BEGIN -->\` and \`<!-- ICC:END -->\` markers. If markers are absent, append a fresh \`<!-- ICC:BEGIN -->\\n...\\n<!-- ICC:END -->\` block. Use \`sed\` or a small awk script; write via tempfile + mv.
+   - **\`~/.claude/CLAUDE.md\`** — migrate the file using the four-case rule that mirrors \`migrateClaudeMd\` in \`src/manifest.ts\`. Run the following bash block (it handles all four cases: marker-replace, canonical-H1-replace, fuzzy-warn-and-append, plain-append):
+     \`\`\`bash
+     NEW_INNER=$(jq -r '.claudeMd.content' /tmp/icc-setup-fetch.json)
+     EXISTING=$(cat ~/.claude/CLAUDE.md 2>/dev/null || true)
+     if printf '%s' "$EXISTING" | grep -q '<!-- ICC:BEGIN'; then
+       # Case 1: markers already present — replace the region
+       awk -v new="$NEW_INNER" '
+         /<!-- ICC:BEGIN/ { print "<!-- ICC:BEGIN -->"; print new; print "<!-- ICC:END -->"; in_region=1; next }
+         /<!-- ICC:END/ { in_region=0; next }
+         !in_region { print }
+       ' ~/.claude/CLAUDE.md > ~/.claude/CLAUDE.md.tmp
+     elif printf '%s' "$EXISTING" | grep -qE '^# ICC (Inbox|Activation|Config Drift)'; then
+       # Case 2: canonical ICC H1 region present — replace contiguous region with marker block
+       FIRST=$(printf '%s' "$EXISTING" | grep -nE '^# ICC (Inbox|Activation|Config Drift)' | head -1 | cut -d: -f1)
+       LAST=$(printf '%s' "$EXISTING" | awk -v start="$FIRST" 'NR>start && /^# / && !/^# ICC/ {print NR-1; exit}')
+       if [ -z "$LAST" ]; then LAST=$(printf '%s' "$EXISTING" | wc -l); fi
+       {
+         printf '%s' "$EXISTING" | sed -n "1,$((FIRST-1))p" | sed -e :a -e '/^$/{$d;N;ba' -e '}'
+         echo
+         echo "<!-- ICC:BEGIN -->"
+         printf '%s\\n' "$NEW_INNER"
+         echo "<!-- ICC:END -->"
+         printf '%s' "$EXISTING" | sed -n "$((LAST+1)),\\\$p" | sed '/./,$!d'
+       } > ~/.claude/CLAUDE.md.tmp
+     elif printf '%s' "$EXISTING" | grep -qE '^#{1,6}[[:space:]]+ICC\\b'; then
+       # Case 3: fuzzy ICC heading at non-canonical level — append + warn
+       echo "[ICC] Possible ICC content detected outside marker region — please remove old content manually if duplicated." >&2
+       {
+         printf '%s\\n' "$EXISTING"
+         echo
+         echo "<!-- ICC:BEGIN -->"
+         printf '%s\\n' "$NEW_INNER"
+         echo "<!-- ICC:END -->"
+       } > ~/.claude/CLAUDE.md.tmp
+     else
+       # Case 4: no ICC content at all — append (or create from scratch)
+       {
+         if [ -n "$EXISTING" ]; then printf '%s\\n\\n' "$EXISTING"; fi
+         echo "<!-- ICC:BEGIN -->"
+         printf '%s\\n' "$NEW_INNER"
+         echo "<!-- ICC:END -->"
+       } > ~/.claude/CLAUDE.md.tmp
+     fi
+     mv ~/.claude/CLAUDE.md.tmp ~/.claude/CLAUDE.md
+     \`\`\`
+     This block is intentionally verbose because shell-based heading detection has no equivalent of TypeScript's \`migrateClaudeMd\` — the four cases must be unrolled inline. The behavior matches \`src/manifest.ts:migrateClaudeMd\` byte-for-byte where it matters: H1 ICC regions get replaced (not duplicated), non-canonical headings get a stderr warning instead of silent clobber, and re-running /sync is idempotent because case 1 (markers present) becomes the path on the second run.
 
    - **Skill files** under \`~/.claude/skills/\` — write the whole file (content is in \`.skills.<name>.content\` in the fetched payload):
      \`\`\`bash
@@ -386,14 +433,15 @@ The applied-config manifest is stored at \`~/.icc/applied-config-manifest.<IDENT
      \`\`\`
      Repeat for watch, snooze, wake.
 
-9. **Update the manifest** atomically with two-level semantics:
+9. **Update the manifest** atomically with two-level semantics. Step 2 already \`mkdir -p\`'d \`$HOME/.icc\`, so the manifest's parent directory exists.
    - **Per-file hashes:** advance \`.files["<path>"].hash\` for each successful write; preserve the prior hash for skipped/failed files.
    - **Top-level \`version\`:** advance to \`$VERSION\` only if EVERY file succeeded AND no hand-edited files were skipped; otherwise leave the top-level version unchanged.
-   - Write via tempfile + mv:
+   - If \`$MANIFEST\` does not exist yet, seed it: \`echo '{"version":null,"files":{}}' > "$MANIFEST"\`
+   - Then write via tempfile + mv:
      \`\`\`bash
      jq --arg v "$VERSION" --arg h "$LOCAL_HASH" '.version = $v | .files["~/.claude.json"].hash = $h' "$MANIFEST" > "$MANIFEST.tmp" && mv "$MANIFEST.tmp" "$MANIFEST"
      \`\`\`
-     (Generalize for each file; create the manifest with \`{"version":null,"files":{}}\` if missing.)
+     (Generalize the \`.files["..."].hash\` update for each successfully-written file in the same jq invocation.)
 
 10. **Print a summary** grouped by \`restartCategories[category].action\` from the payload:
     - Applied (N files)
@@ -622,6 +670,7 @@ export interface RestartCategories {
 
 export interface SetupPayload {
   version: string;             // 12-char content hash
+  identity: string;            // host identity (so Docker /sync can read it without ~/.icc/config.json on host)
   hostMode: HostMode;
   instructions: string;
   mcp: McpEntry;
@@ -676,6 +725,7 @@ function buildMcpEntry(config: ICCConfig, mode: HostMode): McpEntry {
 export function buildSetupPayload(config: ICCConfig): SetupPayload {
   const hostMode = detectMode(config);
   const payloadWithoutVersion = {
+    identity: config.identity,
     hostMode,
     instructions: INSTRUCTIONS,
     mcp: buildMcpEntry(config, hostMode),

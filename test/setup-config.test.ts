@@ -518,3 +518,58 @@ describe('setup-config: buildSkillsTemplate sync skill', () => {
     assert.match(content, /^name: sync/m);
   });
 });
+
+describe('setup-config: buildSetupPayload identity field (B15 fix)', () => {
+  it('payload.identity equals config.identity', () => {
+    const cfg = baseConfig({ localhostHttpPort: 3178, localToken: 'tok' });
+    cfg.identity = 'rpi1-test';
+    const payload = buildSetupPayload(cfg);
+    assert.equal(payload.identity, 'rpi1-test');
+  });
+
+  it('changing identity changes the version (per-host hash)', () => {
+    const a = buildSetupPayload({ ...baseConfig({ localhostHttpPort: 3178 }), identity: 'host-a' });
+    const b = buildSetupPayload({ ...baseConfig({ localhostHttpPort: 3178 }), identity: 'host-b' });
+    assert.notEqual(a.version, b.version);
+  });
+});
+
+describe('setup-config: Docker sync skill identity sourcing (B15 fix)', () => {
+  function dockerConfig() { return baseConfig({ localhostHttpPort: 3178, localToken: 'tok' }); }
+
+  it('reads IDENTITY from /tmp/icc-setup-fetch.json (NOT ~/.icc/config.json)', () => {
+    const tpl = buildSkillsTemplate(dockerConfig());
+    const content = (tpl as any).sync.content;
+    assert.match(content, /jq -r \.identity \/tmp\/icc-setup-fetch\.json/);
+    assert.ok(
+      !content.includes('jq -r .identity ~/.icc/config.json'),
+      'must NOT read identity from host ~/.icc/config.json (does not exist on Docker hosts)'
+    );
+  });
+
+  it('mkdir -p ~/.icc before manifest write', () => {
+    const tpl = buildSkillsTemplate(dockerConfig());
+    const content = (tpl as any).sync.content;
+    assert.match(content, /mkdir -p "?\$HOME\/\.icc"?/);
+  });
+
+  it('CLAUDE.md migration handles canonical H1 ICC headings', () => {
+    const tpl = buildSkillsTemplate(dockerConfig());
+    const content = (tpl as any).sync.content;
+    // The shell block must include the canonical-H1 detection regex inside its
+    // grep -qE clause, mirroring migrateClaudeMd's ICC_CANONICAL_HEADINGS list.
+    assert.ok(
+      content.includes('^# ICC (Inbox|Activation|Config Drift)'),
+      'shell block must reference the canonical H1 ICC heading set'
+    );
+  });
+
+  it('CLAUDE.md migration handles fuzzy ICC headings with stderr warning', () => {
+    const tpl = buildSkillsTemplate(dockerConfig());
+    const content = (tpl as any).sync.content;
+    assert.ok(
+      content.includes('Possible ICC content detected outside marker region'),
+      'must include the fuzzy-warning stderr message'
+    );
+  });
+});
