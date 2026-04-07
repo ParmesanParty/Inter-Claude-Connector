@@ -398,3 +398,143 @@ function buildBareMetalHooks(_config: ICCConfig): HooksTemplate {
     },
   };
 }
+
+// ─────────────────────────────────────────────────────────────────────────
+// Setup payload — composes hooks + skills + mcp + claudeMd + version
+// ─────────────────────────────────────────────────────────────────────────
+
+/**
+ * Host-agnostic CLAUDE.md content. Moved verbatim from src/server.ts so the
+ * /setup/claude-code endpoint and the manifest hashing both source from one
+ * place. Update this when the content needs to change — do NOT keep two
+ * copies in sync by hand.
+ */
+export const CLAUDE_MD_CONTENT = `# ICC Inbox
+
+When a hook surfaces an unread message notification (e.g. "You have N unread messages"), you **must**:
+1. Call \`check_messages\` (MCP tool) to read them
+2. Briefly acknowledge the messages to the user
+3. Use \`respond_to_message\` if a reply is warranted
+4. Follow message conventions: prefix with \`[TOPIC: x]\`, and set the \`status\`
+   parameter on \`send_message\`/\`respond_to_message\` (preferred) or suffix with
+   \`[STATUS: WAITING_FOR_REPLY|FYI_ONLY|ACTION_NEEDED|RESOLVED]\` in body text
+
+# ICC Activation & Mail Watcher
+
+On session start, the startup hook outputs status: "ICC: connected, N unread.
+Run /watch to activate." Do NOT auto-launch the watcher on startup. The user
+or model invokes \`/watch\` to activate.
+
+**Subagents (spawned via the Agent tool) must NOT launch or manage mail
+watchers.** Only the root conversation handles the watcher lifecycle.
+
+When the background watcher task completes, read its output and silently re-launch after handling:
+- If output contains \`[ICC] Mail received\`: call \`check_messages\` MCP tool, then re-launch
+- Otherwise (connection dropped, process killed): silently re-launch
+Do not announce or comment on watcher restarts to the user.
+
+The watcher has no cycling timer — it runs for the full session and only exits on mail receipt, session end, or unexpected process death. If the \`icc hook check\` safety net emits \`[ICC] Watcher not running\` on a later prompt, re-launch unless the watcher is snoozed.
+
+If a watcher launch is denied by a hook or returns \`[ICC] Watcher already active\`, do nothing — another watcher is already handling this instance. Do not retry.
+
+Known limitation: \`/clear\` kills the watcher — the model loses the background task ID and can't receive the completion notification. Recovery is automatic: \`SessionStart clear\` hook re-fires startup, and \`icc hook check\` on the next prompt emits \`[ICC] Watcher not running\`.`;
+
+export interface McpEntry {
+  target: string;        // '~/.claude.json'
+  mergeKey: string;      // 'mcpServers.icc'
+  config: Record<string, unknown>;
+}
+
+export interface ClaudeMdEntry {
+  target: string;        // '~/.claude/CLAUDE.md'
+  append: boolean;
+  content: string;
+}
+
+export type RestartAction = 'in-session' | 'next-session' | 'immediate';
+
+export interface RestartCategory {
+  action: RestartAction;
+  command: string | null;
+  label: string;
+}
+
+export interface RestartCategories {
+  mcp: RestartCategory;
+  hooks: RestartCategory;
+  skills: RestartCategory;
+  claudeMd: RestartCategory;
+}
+
+export interface SetupPayload {
+  version: string;             // 12-char content hash
+  hostMode: HostMode;
+  instructions: string;
+  mcp: McpEntry;
+  hooks: HooksTemplate;
+  claudeMd: ClaudeMdEntry;
+  skills: SkillsTemplate;
+  restartCategories: RestartCategories;
+  postSetup: string;
+}
+
+const RESTART_CATEGORIES: RestartCategories = {
+  mcp: { action: 'in-session', command: '/mcp', label: 'Run /mcp' },
+  hooks: { action: 'next-session', command: null, label: 'Restart Claude Code' },
+  skills: { action: 'immediate', command: null, label: 'No action needed' },
+  claudeMd: { action: 'next-session', command: null, label: 'Restart Claude Code' },
+};
+
+const INSTRUCTIONS = 'Apply these configurations to integrate Claude Code with this ICC server. For each config file: create parent directories if needed, merge into existing content (do not overwrite unrelated keys). Write each skill file to the specified target path (create directories as needed). After writing all files, tell the user to restart Claude Code for MCP changes to take effect.';
+
+const POST_SETUP = 'Restart Claude Code for MCP changes to take effect. After restart, the SessionStart hook will confirm ICC connectivity. Run /watch to activate the mail watcher.';
+
+function buildMcpEntry(config: ICCConfig, mode: HostMode): McpEntry {
+  if (mode === 'docker') {
+    const port = config.server.localhostHttpPort;
+    const tokenQuery = config.server.localToken ? `?token=${config.server.localToken}` : '';
+    return {
+      target: '~/.claude.json',
+      mergeKey: 'mcpServers.icc',
+      config: { type: 'http', url: `http://localhost:${port}/mcp${tokenQuery}` },
+    };
+  }
+  // Bare-metal: stdio MCP via the icc CLI
+  return {
+    target: '~/.claude.json',
+    mergeKey: 'mcpServers.icc',
+    config: { type: 'stdio', command: 'icc', args: ['mcp'] },
+  };
+}
+
+/**
+ * Composes the full /setup/claude-code payload for this host. The version
+ * field is a content hash of EVERYTHING ELSE in the payload, so any change
+ * to mcp/hooks/skills/claudeMd causes the version to drift, and clients
+ * (sub-project B's /sync skill) detect the drift via /api/hook/startup.
+ *
+ * IMPORTANT: version is per-host, NOT portable across the mesh. Both the
+ * Docker mcp.url and the bare-metal mcp.args embed the host's localToken (or
+ * lack thereof), so two structurally identical hosts will produce different
+ * version hashes. This is by design — manifests are self-comparison only.
+ * Do not introduce any code path that compares version across peers.
+ */
+export function buildSetupPayload(config: ICCConfig): SetupPayload {
+  const hostMode = detectMode(config);
+  const payloadWithoutVersion = {
+    hostMode,
+    instructions: INSTRUCTIONS,
+    mcp: buildMcpEntry(config, hostMode),
+    hooks: buildHooksTemplate(config),
+    claudeMd: {
+      target: '~/.claude/CLAUDE.md',
+      append: true,
+      content: CLAUDE_MD_CONTENT,
+    },
+    skills: buildSkillsTemplate(config),
+    restartCategories: RESTART_CATEGORIES,
+    postSetup: POST_SETUP,
+  };
+  const version = hashPayload(payloadWithoutVersion);
+  return { version, ...payloadWithoutVersion };
+}

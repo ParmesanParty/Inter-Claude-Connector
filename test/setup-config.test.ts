@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { detectMode, buildHooksTemplate, buildSkillsTemplate, canonicalJson, hashPayload, type HostMode } from '../src/setup-config.ts';
+import { detectMode, buildHooksTemplate, buildSkillsTemplate, canonicalJson, hashPayload, buildSetupPayload, type HostMode } from '../src/setup-config.ts';
 import type { ICCConfig } from '../src/types.ts';
 
 function baseConfig(serverOverrides: Partial<ICCConfig['server']> = {}): ICCConfig {
@@ -301,5 +301,73 @@ describe('setup-config: hashPayload', () => {
 
   it('different content produces different hashes', () => {
     assert.notEqual(hashPayload({ x: 1 }), hashPayload({ x: 2 }));
+  });
+});
+
+describe('setup-config: buildSetupPayload', () => {
+  it('returns a payload with all expected top-level keys', () => {
+    const payload = buildSetupPayload(baseConfig({ localhostHttpPort: 3178, localToken: 'tok' }));
+    assert.ok(payload.version);
+    assert.equal(payload.hostMode, 'docker');
+    assert.ok(payload.instructions);
+    assert.ok(payload.mcp);
+    assert.ok(payload.hooks);
+    assert.ok(payload.claudeMd);
+    assert.ok(payload.skills);
+    assert.ok(payload.restartCategories);
+    assert.ok(payload.postSetup);
+  });
+
+  it('version field is 12-char hex', () => {
+    const payload = buildSetupPayload(baseConfig({ localhostHttpPort: 3178 }));
+    assert.match(payload.version, /^[0-9a-f]{12}$/);
+  });
+
+  it('same config yields same version', () => {
+    const a = buildSetupPayload(baseConfig({ localhostHttpPort: 3178, localToken: 'same' }));
+    const b = buildSetupPayload(baseConfig({ localhostHttpPort: 3178, localToken: 'same' }));
+    assert.equal(a.version, b.version);
+  });
+
+  it('Docker and bare-metal configs yield DIFFERENT versions', () => {
+    const docker = buildSetupPayload(baseConfig({ localhostHttpPort: 3178, localToken: 'tok' }));
+    const bare = buildSetupPayload(baseConfig({ localToken: 'tok' }));
+    assert.notEqual(docker.version, bare.version);
+  });
+
+  it('Docker mcp entry uses http transport with localhost url', () => {
+    const payload = buildSetupPayload(baseConfig({ localhostHttpPort: 3178, localToken: 'docker-tok' }));
+    assert.equal(payload.mcp.target, '~/.claude.json');
+    assert.equal(payload.mcp.mergeKey, 'mcpServers.icc');
+    assert.equal(payload.mcp.config.type, 'http');
+    assert.match(payload.mcp.config.url as string, /^http:\/\/localhost:3178\/mcp\?token=docker-tok$/);
+  });
+
+  it('bare-metal mcp entry uses stdio transport via icc CLI', () => {
+    const payload = buildSetupPayload(baseConfig({ localToken: 'bare-tok' }));
+    assert.equal(payload.mcp.config.type, 'stdio');
+    assert.equal(payload.mcp.config.command, 'icc');
+    assert.deepEqual(payload.mcp.config.args, ['mcp']);
+  });
+
+  it('restartCategories has 4 entries with correct actions', () => {
+    const payload = buildSetupPayload(baseConfig({ localhostHttpPort: 3178 }));
+    assert.equal(payload.restartCategories.mcp.action, 'in-session');
+    assert.equal(payload.restartCategories.mcp.command, '/mcp');
+    assert.equal(payload.restartCategories.hooks.action, 'next-session');
+    assert.equal(payload.restartCategories.skills.action, 'immediate');
+    assert.equal(payload.restartCategories.claudeMd.action, 'next-session');
+  });
+
+  it('claudeMd content is host-agnostic (no $hostname, no IP, no token)', () => {
+    const payload = buildSetupPayload(baseConfig({ localhostHttpPort: 3178, localToken: 'should-not-leak' }));
+    assert.ok(!payload.claudeMd.content.includes('should-not-leak'), 'must not leak token into CLAUDE.md');
+    assert.ok(!payload.claudeMd.content.includes('localhost:3178'), 'must not leak port into CLAUDE.md');
+  });
+
+  it('changing localToken changes the version (per-host hash)', () => {
+    const a = buildSetupPayload(baseConfig({ localhostHttpPort: 3178, localToken: 'a' }));
+    const b = buildSetupPayload(baseConfig({ localhostHttpPort: 3178, localToken: 'b' }));
+    assert.notEqual(a.version, b.version);
   });
 });
