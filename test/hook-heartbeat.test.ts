@@ -14,21 +14,47 @@ describe('Heartbeat: watch writes heartbeat file', () => {
   beforeEach(() => { tmp = createTmpHome(); });
   afterEach(() => { tmp.cleanup(); });
 
-  it('watch creates heartbeat and PID files, deletes both on exit', () => {
-    const stdout = runHook('watch', { HOME: tmp.tmpHome }, ['--timeout', '1', '--interval', '1']);
-    assert.ok(stdout.includes('[ICC] Watcher cycled'), 'should output watcher cycled');
+  it('watch creates heartbeat and PID files, deletes both on exit', async () => {
+    const child = spawn('node', [iccBin, 'hook', 'watch', '--pid', String(process.pid), '--interval', '1'], {
+      env: { ...process.env, HOME: tmp.tmpHome, ICC_IDENTITY: 'test-host', ICC_REMOTE_SSH: '', ICC_REMOTE_HTTP: '' },
+      stdio: 'pipe',
+    });
 
+    await new Promise(resolve => setTimeout(resolve, 1500));
     const files = readdirSync(join(tmp.tmpHome, '.icc'));
     const watcherFiles = files.filter(f => f.startsWith('watcher.'));
-    assert.equal(watcherFiles.length, 0, 'heartbeat and PID files should be deleted after watch exits');
+    assert.ok(watcherFiles.length > 0, 'heartbeat and PID files should exist while watcher runs');
+
+    child.kill('SIGTERM');
+    await new Promise(resolve => child.on('close', resolve));
+
+    const after = readdirSync(join(tmp.tmpHome, '.icc'));
+    const afterWatcher = after.filter(f => f.startsWith('watcher.'));
+    assert.equal(afterWatcher.length, 0, 'heartbeat and PID files should be deleted after watch exits');
   });
 
-  it('watch starts even when a provisional heartbeat exists (startup race)', () => {
+  it('watch starts even when a provisional heartbeat exists (startup race)', async () => {
     const hbPath = join(tmp.tmpHome, '.icc', `watcher.${instanceName}.heartbeat`);
     writeFileSync(hbPath, new Date().toISOString());
 
-    const stdout = runHook('watch', { HOME: tmp.tmpHome }, ['--timeout', '1', '--interval', '1']);
-    assert.ok(stdout.includes('[ICC] Watcher cycled'), 'watch should start despite provisional heartbeat');
+    const child = spawn('node', [iccBin, 'hook', 'watch', '--pid', String(process.pid), '--interval', '1'], {
+      env: { ...process.env, HOME: tmp.tmpHome, ICC_IDENTITY: 'test-host', ICC_REMOTE_SSH: '', ICC_REMOTE_HTTP: '' },
+      stdio: 'pipe',
+    });
+
+    const chunks: Buffer[] = [];
+    child.stdout.on('data', (c) => chunks.push(c));
+
+    await new Promise(resolve => setTimeout(resolve, 1500));
+
+    const files = readdirSync(join(tmp.tmpHome, '.icc'));
+    const pidFile = files.find(f => f === `watcher.${instanceName}.pid`);
+    assert.ok(pidFile, 'watch should start despite provisional heartbeat');
+
+    child.kill('SIGTERM');
+    await new Promise(resolve => child.on('close', resolve));
+
+    const stdout = Buffer.concat(chunks).toString();
     assert.ok(!stdout.includes('already active'), 'should NOT report already active');
   });
 });
@@ -202,12 +228,28 @@ describe('Instance-specific blocking', () => {
   beforeEach(() => { tmp = createTmpHome(); });
   afterEach(() => { tmp.cleanup(); });
 
-  it('other instance watcher does not block this instance', () => {
+  it('other instance watcher does not block this instance', async () => {
     writeFileSync(join(tmp.tmpHome, '.icc', 'watcher.other-project.pid'), '1');
     writeFileSync(join(tmp.tmpHome, '.icc', 'watcher.other-project.heartbeat'), new Date().toISOString());
 
-    const stdout = runHook('watch', { HOME: tmp.tmpHome }, ['--timeout', '1', '--interval', '1']);
-    assert.ok(stdout.includes('[ICC] Watcher cycled'), 'should run watcher despite other instance having one');
+    const child = spawn('node', [iccBin, 'hook', 'watch', '--pid', String(process.pid), '--interval', '1'], {
+      env: { ...process.env, HOME: tmp.tmpHome, ICC_IDENTITY: 'test-host', ICC_REMOTE_SSH: '', ICC_REMOTE_HTTP: '' },
+      stdio: 'pipe',
+    });
+
+    const chunks: Buffer[] = [];
+    child.stdout.on('data', (c) => chunks.push(c));
+
+    await new Promise(resolve => setTimeout(resolve, 1500));
+
+    const files = readdirSync(join(tmp.tmpHome, '.icc'));
+    const thisPid = files.find(f => f === `watcher.${instanceName}.pid`);
+    assert.ok(thisPid, 'this instance watcher should be running');
+
+    child.kill('SIGTERM');
+    await new Promise(resolve => child.on('close', resolve));
+
+    const stdout = Buffer.concat(chunks).toString();
     assert.ok(!stdout.includes('already active'), 'should NOT report already active');
   });
 });
