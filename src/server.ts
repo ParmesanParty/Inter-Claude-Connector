@@ -200,8 +200,6 @@ export function createICCServer(options: ICCServerOptions = {}): ICCServer {
   // One-time setup token — disabled after first successful fetch
   let setupToken: string | null = options.setupToken ?? null;
   const localhostHttpPort = options.localhostHttpPort ?? null;
-  // Localhost HTTP base URL for setup/claude-code response
-  const localBaseUrl = localhostHttpPort ? `http://localhost:${localhostHttpPort}` : `http://localhost:${port}`;
 
   // Initialize inbox, desktop notifications, and read receipts
   initInbox();
