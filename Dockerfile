@@ -12,8 +12,11 @@ COPY . .
 # Stage 2 — Runtime
 FROM node:24-alpine
 
-# Runtime dependencies: openssl for TLS cert ops, git for allowed remote commands
-RUN apk add --no-cache openssl git
+# Runtime dependencies: openssl for TLS cert ops, git for allowed remote
+# commands, jq for the Docker SessionStart drift-detection hook (and the
+# /sync skill on hosts that don't have host-side jq) — both invoke
+# `docker exec icc jq ...` to read the in-container applied-config manifest.
+RUN apk add --no-cache openssl git jq
 
 # Create non-root user
 RUN addgroup -S icc && adduser -S icc -G icc -h /home/icc

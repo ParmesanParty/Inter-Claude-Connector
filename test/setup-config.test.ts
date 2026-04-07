@@ -601,3 +601,32 @@ describe('setup-config: Docker sync skill identity sourcing (B15 fix)', () => {
     );
   });
 });
+
+describe('setup-config: Docker hook + sync hardening (B15 jq + OCI runtime fix)', () => {
+  function dockerConfig() { return baseConfig({ localhostHttpPort: 3178, localToken: 'tok' }); }
+
+  it('SessionStart hook wraps manifest read in docker exec test -f existence check', () => {
+    // Without the if-then guard, OCI runtime errors (container stopped, jq
+    // missing, etc.) print to STDOUT not stderr, so `2>/dev/null || echo null`
+    // does NOT catch them — the error text gets captured into APPLIED.
+    // The if-then wrapping uses test's exit code instead, which IS distinct
+    // from runc failures.
+    const tpl = buildHooksTemplate(dockerConfig());
+    const startupCmd: string = tpl.config.SessionStart.find((e: any) => e.matcher === 'startup')!.hooks[0]!.command;
+    assert.match(startupCmd, /if docker exec icc test -f \/home\/icc\/\.icc\/applied-config-manifest/);
+    assert.match(startupCmd, /test -f [^;]+ > \/dev\/null 2>&1/);
+  });
+
+  it('SessionStart hook fall-through sets APPLIED=null when test -f fails', () => {
+    const tpl = buildHooksTemplate(dockerConfig());
+    const startupCmd: string = tpl.config.SessionStart.find((e: any) => e.matcher === 'startup')!.hooks[0]!.command;
+    assert.match(startupCmd, /else APPLIED=null; fi/);
+  });
+
+  it('Docker /sync skill sanity-checks the icc container is running before any docker exec', () => {
+    const tpl = buildSkillsTemplate(dockerConfig());
+    const content = (tpl as any).sync.content;
+    assert.match(content, /docker inspect -f '\{\{\.State\.Running\}\}' icc/);
+    assert.match(content, /ICC container 'icc' is not running/);
+  });
+});

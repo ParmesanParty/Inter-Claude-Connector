@@ -76,7 +76,14 @@ export function buildHooksTemplate(config: ICCConfig): HooksTemplate {
 function buildDockerHooks(config: ICCConfig): HooksTemplate {
   const localBaseUrl = `http://localhost:${config.server.localhostHttpPort}`;
   const authHeader = config.server.localToken ? ` -H 'Authorization: Bearer ${config.server.localToken}'` : '';
-  const startupCmd = `curl -sf -m 1${authHeader} ${localBaseUrl}/api/health > /dev/null 2>&1 || { echo 'ICC: server not reachable. Run /mcp to reconnect, then /watch to activate.'; exit 0; }; APPLIED=$(docker exec icc jq -r .version /home/icc/.icc/applied-config-manifest.${config.identity}.json 2>/dev/null || echo null); if [ "$APPLIED" = "null" ]; then BODY="{\\"instance\\":\\"$(basename $PWD)\\",\\"appliedVersion\\":null}"; else BODY="{\\"instance\\":\\"$(basename $PWD)\\",\\"appliedVersion\\":\\"$APPLIED\\"}"; fi; RESPONSE=$(curl -sf -X POST ${localBaseUrl}/api/hook/startup${authHeader} -H 'Content-Type: application/json' -d "$BODY"); echo "$RESPONSE" | jq -r 'if .drifted == true then "[ICC] Config drifted. Run /sync to update." else empty end'; [ "$APPLIED" = "null" ] && echo "[ICC] Config not yet synced — run /sync to apply."; true`;
+  const manifestPath = `/home/icc/.icc/applied-config-manifest.${config.identity}.json`;
+  // Existence check is done with `test -f` first because docker exec runtime
+  // errors (container stopped, jq missing, etc.) print to STDOUT, not stderr,
+  // so `2>/dev/null || echo null` does NOT catch them — the OCI error text
+  // would be captured into APPLIED instead of falling through. The if-then
+  // wrapping uses the test command's exit code, which IS distinct from runc
+  // failures, and we discard both streams so nothing leaks.
+  const startupCmd = `curl -sf -m 1${authHeader} ${localBaseUrl}/api/health > /dev/null 2>&1 || { echo 'ICC: server not reachable. Run /mcp to reconnect, then /watch to activate.'; exit 0; }; if docker exec icc test -f ${manifestPath} > /dev/null 2>&1; then APPLIED=$(docker exec icc jq -r .version ${manifestPath} 2>/dev/null || echo null); else APPLIED=null; fi; if [ "$APPLIED" = "null" ]; then BODY="{\\"instance\\":\\"$(basename $PWD)\\",\\"appliedVersion\\":null}"; else BODY="{\\"instance\\":\\"$(basename $PWD)\\",\\"appliedVersion\\":\\"$APPLIED\\"}"; fi; RESPONSE=$(curl -sf -X POST ${localBaseUrl}/api/hook/startup${authHeader} -H 'Content-Type: application/json' -d "$BODY"); echo "$RESPONSE" | jq -r 'if .drifted == true then "[ICC] Config drifted. Run /sync to update." else empty end'; [ "$APPLIED" = "null" ] && echo "[ICC] Config not yet synced — run /sync to apply."; true`;
   const heartbeatCmd = `ST=$(cat /tmp/icc-session-$PPID.token 2>/dev/null); [ -n "$ST" ] && curl -sf --max-time 1 -X POST ${localBaseUrl}/api/hook/heartbeat${authHeader} -H 'Content-Type: application/json' -d "{\\"sessionToken\\":\\"$ST\\"}" || { [ -n "$ST" ] && echo "[ICC] Server unreachable — reconnect MCP with /mcp"; true; }`;
   return {
     target: '~/.claude/settings.json',
@@ -312,13 +319,18 @@ The applied-config manifest is stored INSIDE the ICC container at \`/home/icc/.i
 
 ## Steps
 
-1. **Fetch the canonical payload** via the Bash tool:
+1. **Sanity check the container is running.** All manifest reads/writes go through \`docker exec icc\`, so a stopped container would fail later in confusing ways. Bail out early with a clear message:
+   \`\`\`bash
+   docker inspect -f '{{.State.Running}}' icc 2>/dev/null | grep -q true || { echo "ICC container 'icc' is not running. Start it with: docker compose up -d"; exit 1; }
+   \`\`\`
+
+2. **Fetch the canonical payload** via the Bash tool:
    \`\`\`bash
    curl -sf -H 'Authorization: Bearer ${config.server.localToken}' ${localBaseUrl}/setup/claude-code > /tmp/icc-setup-fetch.json
    \`\`\`
    If this fails, stop and tell the user the server is unreachable.
 
-2. **Extract identity and manifest path.** The host identity is baked into the setup payload by the server. The manifest path points INSIDE the container (no host-side state):
+3. **Extract identity and manifest path.** The host identity is baked into the setup payload by the server. The manifest path points INSIDE the container (no host-side state):
    \`\`\`bash
    IDENTITY=$(jq -r .identity /tmp/icc-setup-fetch.json)
    MANIFEST_PATH="/home/icc/.icc/applied-config-manifest.$IDENTITY.json"
@@ -328,7 +340,7 @@ The applied-config manifest is stored INSIDE the ICC container at \`/home/icc/.i
    \`\`\`
    The manifest lives in the container's existing \`icc-data\` volume, alongside \`config.json\` and \`inbox.db\`. **No directory or file is created on the host.** All manifest reads/writes go through \`docker exec icc\`.
 
-3. **Read the stored manifest from inside the container** (may not exist on first sync):
+4. **Read the stored manifest from inside the container** (may not exist on first sync):
    \`\`\`bash
    STORED_MANIFEST=$(docker exec icc cat "$MANIFEST_PATH" 2>/dev/null || echo '')
    if [ -n "$STORED_MANIFEST" ]; then
@@ -340,7 +352,7 @@ The applied-config manifest is stored INSIDE the ICC container at \`/home/icc/.i
    \`\`\`
    If \`STORED_VERSION\` equals \`VERSION\`, the config is already at the server version — but still proceed to per-file classification in case files were hand-edited.
 
-4. **For each managed file, compute three SHA-256 hashes:**
+5. **For each managed file, compute three SHA-256 hashes:**
    - **local hash** — the current content of the local "owned region" (JSON subtree, marker-delimited region, or whole file)
    - **stored hash** — per-file hash recorded in the in-container manifest under \`.files["<path>"].hash\` (or empty on first sync). Read it from \`$STORED_MANIFEST\` (already cat'd from the container in step 3).
    - **server hash** — hash of the server's proposed content from \`/tmp/icc-setup-fetch.json\`
@@ -355,17 +367,17 @@ The applied-config manifest is stored INSIDE the ICC container at \`/home/icc/.i
    \`\`\`
    Apply the analogous pattern for \`~/.claude/settings.json\` (subtree: \`.hooks\`), the CLAUDE.md marker region, and each skill file.
 
-5. **Classify each file** based on the three hashes:
+6. **Classify each file** based on the three hashes:
    - \`local == server\` → **unchanged** (no-op)
    - \`local == stored && stored != server\` → **clean-update** (auto-apply)
    - \`local != stored\` → **hand-edited** (prompt user)
    - On first sync (\`STORED_VERSION == null\`): if \`local == server\` treat as unchanged; if file is absent or empty treat as clean-update; otherwise treat as hand-edited.
 
-6. **For each hand-edited file**, print the file path, a short diff hint (e.g. \`diff <(...) <(...)\`), and ask the user one of: \`apply\` / \`skip\` / \`abort\`. Collect ALL answers before writing anything.
+7. **For each hand-edited file**, print the file path, a short diff hint (e.g. \`diff <(...) <(...)\`), and ask the user one of: \`apply\` / \`skip\` / \`abort\`. Collect ALL answers before writing anything.
 
-7. **If any answer is \`abort\`**, print "Aborted. No files written." and exit without touching the manifest.
+8. **If any answer is \`abort\`**, print "Aborted. No files written." and exit without touching the manifest.
 
-8. **Otherwise, apply all clean-update and apply-confirmed files** using atomic tempfile + mv:
+9. **Otherwise, apply all clean-update and apply-confirmed files** using atomic tempfile + mv:
 
    - **\`~/.claude.json\`** — replace \`mcpServers.icc\` subtree:
      \`\`\`bash
@@ -433,7 +445,7 @@ The applied-config manifest is stored INSIDE the ICC container at \`/home/icc/.i
      \`\`\`
      Repeat for watch, snooze, wake.
 
-9. **Update the manifest atomically inside the container** with two-level semantics. The manifest lives at \`$MANIFEST_PATH\` inside the \`icc\` container; all reads and writes go through \`docker exec\`.
+10. **Update the manifest atomically inside the container** with two-level semantics. The manifest lives at \`$MANIFEST_PATH\` inside the \`icc\` container; all reads and writes go through \`docker exec\`.
    - **Per-file hashes:** advance \`.files["<path>"].hash\` for each successful write; preserve the prior hash for skipped/failed files.
    - **Top-level \`version\`:** advance to \`$VERSION\` only if EVERY file succeeded AND no hand-edited files were skipped; otherwise leave the top-level version unchanged.
    - **Build the new manifest in the host's shell** (using jq on \`$STORED_MANIFEST\` plus the per-file hashes you computed in step 4), then **stream it INTO the container** via \`tee\`. Example shape:
@@ -468,7 +480,7 @@ The applied-config manifest is stored INSIDE the ICC container at \`/home/icc/.i
      \`\`\`
      If a particular file was not successfully applied (skipped or failed), use the prior hash from \`$STORED_MANIFEST\` for that entry instead of the new hash. The two-level rule for the top-level \`.version\` field still applies: advance only on full reconciliation.
 
-10. **Print a summary** grouped by \`restartCategories[category].action\` from the payload:
+11. **Print a summary** grouped by \`restartCategories[category].action\` from the payload:
     - Applied (N files)
     - Skipped (N files with local edits)
     - Failed (N files — re-run \`/sync\` to retry)
