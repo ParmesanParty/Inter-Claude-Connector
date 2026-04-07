@@ -659,12 +659,25 @@ async function hook() {
         process.stdout.write('ICC: server not reachable. Run /mcp to reconnect, then /watch to activate.\n');
         break;
       }
+      // B9: read applied-config manifest (if any) so the server can compare
+      // our stored payload version against the canonical setup payload and
+      // tell us whether to /sync. No second HTTP roundtrip — appliedVersion
+      // rides along in the existing POST body.
+      const { readManifest } = await import('../src/manifest.ts');
+      const manifestPath = join(homedir(), '.icc', `applied-config-manifest.${config.identity}.json`);
+      const manifest = readManifest(manifestPath);
+      const appliedVersion: string | null = manifest?.version ?? null;
       // Query server for connection status + unread count (non-fatal)
-      const startupResult = await hookRequest('/api/hook/startup', { instance: instanceName });
+      const startupResult = await hookRequest('/api/hook/startup', { instance: instanceName, appliedVersion });
       if (startupResult?.connected) {
         process.stdout.write(`ICC: connected, ${startupResult.unreadCount} unread. Run /watch to activate.\n`);
       } else {
         process.stdout.write('ICC: server not reachable. Run /mcp to reconnect, then /watch to activate.\n');
+      }
+      if (startupResult?.drifted === true) {
+        process.stdout.write('[ICC] Config drifted. Run /sync to update.\n');
+      } else if (appliedVersion === null) {
+        process.stdout.write('[ICC] Config not yet synced — run /sync to apply.\n');
       }
       break;
     }
