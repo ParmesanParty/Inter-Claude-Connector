@@ -4,7 +4,7 @@
 
 **Goal:** Add a GitHub Actions workflow that publishes `parmesanparty/icc` as a multi-arch Docker image (`linux/amd64` + `linux/arm64`) on every merge to `main` and on every `v*` git tag, so that rpi1 (and any future Docker peer) can update via `docker compose pull && docker compose up -d` with no local build step.
 
-**Architecture:** Two parallel build jobs on GitHub-hosted native runners (`ubuntu-24.04` + `ubuntu-24.04-arm`) produce digest-only single-arch images via `docker/build-push-action`. A third `merge` job composes the digests into a multi-arch manifest under the human-readable tags derived by `docker/metadata-action`. Layer caching via `type=gha`. Authenticates to Docker Hub using `DOCKER_USERNAME` + `DOCKER_PASSWORD` repo secrets.
+**Architecture:** Two parallel build jobs on GitHub-hosted native runners (`ubuntu-24.04` + `ubuntu-24.04-arm`) produce digest-only single-arch images via `docker/build-push-action`. A third `merge` job composes the digests into a multi-arch manifest under the human-readable tags derived by `docker/metadata-action`. Layer caching via `type=gha`. Authenticates to Docker Hub using `DOCKER_USERNAME` + `DOCKER_TOKEN` repo secrets.
 
 **Tech Stack:** GitHub Actions, `docker/login-action@v3`, `docker/metadata-action@v5`, `docker/build-push-action@v6`, `docker/setup-buildx-action@v3`.
 
@@ -19,7 +19,7 @@
 1. Create a Docker Hub Personal Access Token (PAT) with `Read, Write, Delete` scope on the `parmesanparty/icc` repository (https://hub.docker.com/settings/security)
 2. Add two GitHub repository secrets (at https://github.com/ParmesanParty/Inter-Claude-Connector/settings/secrets/actions):
    - `DOCKER_USERNAME` — `parmesanparty`
-   - `DOCKER_PASSWORD` — the PAT value
+   - `DOCKER_TOKEN` — the PAT value (named `DOCKER_TOKEN` rather than `DOCKER_PASSWORD` because it *is* a token — the plan originally used the misleading `DOCKER_PASSWORD` name to match `docker/login-action`'s `password:` field. The field name is the HTTP Basic auth password field, but the value we store is a PAT.)
 
 These are one-time manual steps. The implementation agent must pause and prompt the user to confirm before running the workflow end-to-end in Task 3.
 
@@ -104,7 +104,7 @@ jobs:
         uses: docker/login-action@v3
         with:
           username: ${{ secrets.DOCKER_USERNAME }}
-          password: ${{ secrets.DOCKER_PASSWORD }}
+          password: ${{ secrets.DOCKER_TOKEN }}
 
       - name: Compute cache scope
         id: cache-scope
@@ -140,7 +140,7 @@ jobs:
         uses: docker/login-action@v3
         with:
           username: ${{ secrets.DOCKER_USERNAME }}
-          password: ${{ secrets.DOCKER_PASSWORD }}
+          password: ${{ secrets.DOCKER_TOKEN }}
 
       - name: Docker metadata
         id: meta
@@ -188,7 +188,7 @@ ubuntu-24.04 and ubuntu-24.04-arm runners; digest-only intermediates
 merged into a multi-arch manifest by a third job. Layer caching via
 type=gha scoped per platform.
 
-Prerequisite: DOCKER_USERNAME and DOCKER_PASSWORD repo secrets must
+Prerequisite: DOCKER_USERNAME and DOCKER_TOKEN repo secrets must
 exist before the workflow can run. See docs/superpowers/plans/2026-04-07-sub-project-a-docker-ci-publish.md.
 
 Related spec: docs/superpowers/specs/2026-04-07-docker-ci-publish-design.md"
@@ -202,7 +202,7 @@ Related spec: docs/superpowers/specs/2026-04-07-docker-ci-publish-design.md"
 
 Pause implementation and ask the user:
 
-> "Have you added `DOCKER_USERNAME` and `DOCKER_PASSWORD` as repository secrets at https://github.com/ParmesanParty/Inter-Claude-Connector/settings/secrets/actions? The workflow will fail at the Docker Hub login step without them."
+> "Have you added `DOCKER_USERNAME` and `DOCKER_TOKEN` as repository secrets at https://github.com/ParmesanParty/Inter-Claude-Connector/settings/secrets/actions? The workflow will fail at the Docker Hub login step without them."
 
 Wait for confirmation before proceeding to Task 3. If the user has not added them, read them the "Prerequisites" section at the top of this plan and wait until they confirm.
 
