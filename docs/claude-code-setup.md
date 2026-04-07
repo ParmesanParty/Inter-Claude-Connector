@@ -264,6 +264,8 @@ Register this instance with the ICC server and launch the mail watcher. This is 
 4. When the background task completes later, read its output and handle:
    - If output contains `[ICC] Mail received`: call `check_messages` MCP tool, then relaunch
    - Otherwise (connection dropped, process killed): silently relaunch
+
+The watcher has no cycling timer — it runs for the full session and only exits on mail receipt, session end, or unexpected process death. Any non-mail exit is a silent relaunch trigger.
 ```
 
 ### `/snooze` — suppress watcher auto-launches
