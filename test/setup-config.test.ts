@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { detectMode, buildHooksTemplate, buildSkillsTemplate, type HostMode } from '../src/setup-config.ts';
+import { detectMode, buildHooksTemplate, buildSkillsTemplate, canonicalJson, hashPayload, type HostMode } from '../src/setup-config.ts';
 import type { ICCConfig } from '../src/types.ts';
 
 function baseConfig(serverOverrides: Partial<ICCConfig['server']> = {}): ICCConfig {
@@ -255,5 +255,51 @@ describe('setup-config: buildSkillsTemplate (bare-metal mode)', () => {
   it('wake skill uses "icc hook wake-watcher"', () => {
     const tpl = buildSkillsTemplate(bareConfig());
     assert.match(tpl.wake.content, /icc hook wake-watcher/);
+  });
+});
+
+describe('setup-config: canonicalJson', () => {
+  it('serializes primitives like JSON.stringify', () => {
+    assert.equal(canonicalJson(null), 'null');
+    assert.equal(canonicalJson(42), '42');
+    assert.equal(canonicalJson('hi'), '"hi"');
+    assert.equal(canonicalJson(true), 'true');
+  });
+
+  it('sorts object keys recursively', () => {
+    assert.equal(canonicalJson({ b: 1, a: 2 }), '{"a":2,"b":1}');
+    assert.equal(canonicalJson({ z: { y: 1, x: 2 }, a: 3 }), '{"a":3,"z":{"x":2,"y":1}}');
+  });
+
+  it('preserves array order', () => {
+    assert.equal(canonicalJson([3, 1, 2]), '[3,1,2]');
+  });
+
+  it('produces identical output for equal-but-differently-ordered objects', () => {
+    const a = { foo: 1, bar: { x: 1, y: 2 }, baz: [1, 2, 3] };
+    const b = { baz: [1, 2, 3], bar: { y: 2, x: 1 }, foo: 1 };
+    assert.equal(canonicalJson(a), canonicalJson(b));
+  });
+});
+
+describe('setup-config: hashPayload', () => {
+  it('returns 12-char hex', () => {
+    const h = hashPayload({ x: 1 });
+    assert.match(h, /^[0-9a-f]{12}$/);
+  });
+
+  it('is deterministic', () => {
+    assert.equal(hashPayload({ a: 1 }), hashPayload({ a: 1 }));
+  });
+
+  it('equal-but-differently-ordered objects produce identical hashes', () => {
+    assert.equal(
+      hashPayload({ foo: 1, bar: 2 }),
+      hashPayload({ bar: 2, foo: 1 })
+    );
+  });
+
+  it('different content produces different hashes', () => {
+    assert.notEqual(hashPayload({ x: 1 }), hashPayload({ x: 2 }));
   });
 });

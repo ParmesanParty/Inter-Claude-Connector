@@ -9,7 +9,31 @@
 // .localhostHttpPort is populated by loadConfig from the env var, so this
 // becomes a stateless config-based discriminator that works without probing
 // /.dockerenv or running shell commands.
+import { createHash } from 'node:crypto';
 import type { ICCConfig } from './types.ts';
+
+/**
+ * Recursive key-sorted JSON serializer. Used as the canonical input to
+ * hashPayload so that equivalent objects with different key orders produce
+ * identical hashes.
+ */
+export function canonicalJson(value: unknown): string {
+  if (value === null || typeof value !== 'object') return JSON.stringify(value);
+  if (Array.isArray(value)) return '[' + value.map(canonicalJson).join(',') + ']';
+  const keys = Object.keys(value as object).sort();
+  const entries = keys.map((k) => JSON.stringify(k) + ':' + canonicalJson((value as Record<string, unknown>)[k]));
+  return '{' + entries.join(',') + '}';
+}
+
+/**
+ * 12-char SHA-256 truncated content hash. Truncated because this is the
+ * user-facing setup payload `version` field — short matters more than
+ * collision-proof. Manifest entries (in src/manifest.ts) use the full 64-char
+ * hash because byte-exact equality matters there.
+ */
+export function hashPayload(value: unknown): string {
+  return createHash('sha256').update(canonicalJson(value), 'utf8').digest('hex').slice(0, 12);
+}
 
 export type HostMode = 'docker' | 'bare-metal';
 
