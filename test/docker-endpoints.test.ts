@@ -332,6 +332,34 @@ describe('/setup/claude-code skill template: stale-token recovery', () => {
     });
   });
 
+  it('SessionStart startup/resume/clear commands include /api/health guard', async () => {
+    await withServer({}, async (port) => {
+      const res = await httpJSON(port, 'GET', '/setup/claude-code');
+      const matchers = ['startup', 'resume', 'clear'];
+      for (const matcher of matchers) {
+        const entry = res.data.hooks.config.SessionStart.find((e: any) => e.matcher === matcher);
+        assert.ok(entry, `SessionStart ${matcher} entry must exist`);
+        const command: string = entry.hooks[0].command;
+        assert.ok(
+          command.includes('/api/health'),
+          `${matcher} command must include /api/health pre-check; got: ${command}`
+        );
+        assert.ok(
+          command.includes('ICC: server not reachable. Run /mcp to reconnect, then /watch to activate.'),
+          `${matcher} command must emit exact unreachable hint on health failure; got: ${command}`
+        );
+        assert.ok(
+          command.includes('exit 0'),
+          `${matcher} command must exit 0 on health failure (soft warning, not hook error)`
+        );
+        assert.ok(
+          command.includes('/api/hook/startup'),
+          `${matcher} command must still POST to /api/hook/startup on success`
+        );
+      }
+    });
+  });
+
   it('/watch skill curl invocation does not use -f so error bodies reach the skill', async () => {
     await withServer({}, async (port) => {
       const res = await httpJSON(port, 'GET', '/setup/claude-code');

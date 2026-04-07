@@ -447,14 +447,14 @@ export function createICCServer(options: ICCServerOptions = {}): ICCServer {
                 matcher: 'startup',
                 hooks: [{
                   type: 'command',
-                  command: `curl -sf -X POST ${localBaseUrl}/api/hook/startup${authHeader} -H 'Content-Type: application/json' -d '{"instance":"'"$(basename $PWD)"'"}'`,
+                  command: `curl -sf -m 1${authHeader} ${localBaseUrl}/api/health > /dev/null 2>&1 || { echo 'ICC: server not reachable. Run /mcp to reconnect, then /watch to activate.'; exit 0; }; curl -sf -X POST ${localBaseUrl}/api/hook/startup${authHeader} -H 'Content-Type: application/json' -d '{"instance":"'"$(basename $PWD)"'"}'`,
                 }],
               },
               {
                 matcher: 'resume',
                 hooks: [{
                   type: 'command',
-                  command: `curl -sf -X POST ${localBaseUrl}/api/hook/startup${authHeader} -H 'Content-Type: application/json' -d '{"instance":"'"$(basename $PWD)"'"}'`,
+                  command: `curl -sf -m 1${authHeader} ${localBaseUrl}/api/health > /dev/null 2>&1 || { echo 'ICC: server not reachable. Run /mcp to reconnect, then /watch to activate.'; exit 0; }; curl -sf -X POST ${localBaseUrl}/api/hook/startup${authHeader} -H 'Content-Type: application/json' -d '{"instance":"'"$(basename $PWD)"'"}'`,
                 }],
               },
               {
@@ -468,7 +468,7 @@ export function createICCServer(options: ICCServerOptions = {}): ICCServer {
                 matcher: 'clear',
                 hooks: [{
                   type: 'command',
-                  command: `curl -sf -X POST ${localBaseUrl}/api/hook/startup${authHeader} -H 'Content-Type: application/json' -d '{"instance":"'"$(basename $PWD)"'"}'`,
+                  command: `curl -sf -m 1${authHeader} ${localBaseUrl}/api/health > /dev/null 2>&1 || { echo 'ICC: server not reachable. Run /mcp to reconnect, then /watch to activate.'; exit 0; }; curl -sf -X POST ${localBaseUrl}/api/hook/startup${authHeader} -H 'Content-Type: application/json' -d '{"instance":"'"$(basename $PWD)"'"}'`,
                 }],
               },
             ],
