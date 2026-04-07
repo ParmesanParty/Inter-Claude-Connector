@@ -1,5 +1,15 @@
 # Docker Deployment
 
+> **As of 2026-04-07, `/setup/claude-code` is the authoritative source of
+> truth for ICC integration files.** After initial setup, use the `/sync`
+> skill to reconcile local `~/.claude.json`, `~/.claude/settings.json`,
+> `~/.claude/CLAUDE.md`, and `~/.claude/skills/{watch,snooze,wake,sync}/
+> SKILL.md` against the container's canonical payload. The ICC-owned
+> section of CLAUDE.md is wrapped in `<!-- ICC:BEGIN -->` / `<!-- ICC:END -->`
+> markers — content outside those markers is never touched by sync. Run
+> `/sync` any time you `docker compose pull && docker compose up -d` after
+> a release.
+
 Run ICC in a container with zero host dependencies — no Node.js, npm, or build tools needed.
 
 ## Quick Start

@@ -1,6 +1,16 @@
 # Claude Code Setup for ICC
 
-**Last updated: 2026-04-06 — supersedes the cycling-watcher model.**
+**Last updated: 2026-04-07.**
+
+> **As of 2026-04-07, `/setup/claude-code` is the authoritative source of
+> truth for ICC integration files.** After initial setup, use the `/sync`
+> skill (Docker) or `icc hook sync` (bare-metal) to reconcile your local
+> `~/.claude.json`, `~/.claude/settings.json`, `~/.claude/CLAUDE.md`, and
+> `~/.claude/skills/{watch,snooze,wake,sync}/SKILL.md` against the server's
+> canonical payload. This doc is retained for readability of the manual
+> setup flow. The ICC-owned section of CLAUDE.md is wrapped in
+> `<!-- ICC:BEGIN -->` / `<!-- ICC:END -->` markers — content outside
+> those markers is never touched by sync.
 
 This file is the **source of truth** for ICC integration on any host —
 new or already configured. Open a Claude Code session in

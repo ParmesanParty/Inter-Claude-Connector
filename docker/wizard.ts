@@ -462,11 +462,11 @@ function getWizardHTML(localhostPort: number): string {
         Claude Code will ask you to restart afterward.
       </p>
       <p style="color: #71767b; font-size: 0.75rem; margin-top: 0.5rem;">
-        Need to reconfigure later? The setup token above is one-time.
-        After it's consumed, fetch <code>/setup/claude-code</code> with
-        <code>Authorization: Bearer &lt;localToken&gt;</code>. See
-        <a href="https://github.com/ParmesanParty/Inter-Claude-Connector/blob/main/docs/docker.md#re-accessing-setup-after-the-wizard"
-        style="color: #1d9bf0; text-decoration: none;">Re-accessing setup after the wizard</a>.
+        After initial setup, use the <code>/sync</code> skill in Claude Code
+        to reconcile your local config files against this container any
+        time you <code>docker compose pull</code>. The setup token above
+        is one-time — once consumed, <code>/sync</code> fetches the
+        canonical payload using your local token automatically.
       </p>
     </div>
     <details style="margin-top: 1rem;">
