@@ -528,23 +528,16 @@ or model invokes \`/watch\` to activate.
 **Subagents (spawned via the Agent tool) must NOT launch or manage mail
 watchers.** Only the root conversation handles the watcher lifecycle.
 
-When the background watcher task completes, read its output and silently
-re-launch after handling:
+When the background watcher task completes, read its output and silently re-launch after handling:
 - If output contains \`[ICC] Mail received\`: call \`check_messages\` MCP tool, then re-launch
-- If output contains \`[ICC] Watcher cycled\`: just re-launch
+- Otherwise (connection dropped, process killed): silently re-launch
 Do not announce or comment on watcher restarts to the user.
 
-If a watcher launch is denied by a hook or returns \`[ICC] Watcher already active\`,
-do nothing — another watcher is already handling this instance. Do not retry.
+The watcher has no cycling timer — it runs for the full session and only exits on mail receipt, session end, or unexpected process death. If the \`icc hook check\` safety net emits \`[ICC] Watcher not running\` on a later prompt, re-launch unless the watcher is snoozed.
 
-Known limitation: \`/clear\` kills the watcher — the model loses the background
-task ID and can't receive the completion notification. Recovery is automatic:
-\`SessionStart clear\` hook re-fires startup. Run \`/watch\` again to reactivate.
+If a watcher launch is denied by a hook or returns \`[ICC] Watcher already active\`, do nothing — another watcher is already handling this instance. Do not retry.
 
-Cognitive pitfall: In idle sessions, watcher cycle-completion notifications can
-stack up in context without timestamps, creating an illusion of rapid cycling.
-Each cycle actually runs its full ~591s. Don't investigate "rapid cycling"
-unless wall-clock timing confirms sub-second completion.`,
+Known limitation: \`/clear\` kills the watcher — the model loses the background task ID and can't receive the completion notification. Recovery is automatic: \`SessionStart clear\` hook re-fires startup, and \`icc hook check\` on the next prompt emits \`[ICC] Watcher not running\`.`,
         },
         skills: {
           watch: {
@@ -600,7 +593,7 @@ This is the activation point for a session — startup only checks status,
 5. **Launch the watcher.** Use the Bash tool with \`run_in_background: true\`
    and \`timeout: 600000\`:
    \`\`\`bash
-   RESULT=$(curl --max-time 591 -sf${authHeader} "${localBaseUrl}/api/watch?instance=INSTANCE&sessionToken=TOKEN"); echo "$RESULT"
+   RESULT=$(curl -sf${authHeader} "${localBaseUrl}/api/watch?instance=INSTANCE&sessionToken=TOKEN"); echo "$RESULT"
    \`\`\`
    (Replace INSTANCE and TOKEN with the values from steps 2 and 4.)
 
@@ -609,7 +602,8 @@ This is the activation point for a session — startup only checks status,
 7. When the background task completes later, read its output and handle:
    - If output contains \`"mail"\`: call \`check_messages\` MCP tool, then
      relaunch from step 5
-   - If output contains \`"timeout"\`: relaunch from step 5`,
+   - Otherwise (connection dropped, process killed): silently relaunch
+     from step 5`,
           },
           snooze: {
             target: '~/.claude/skills/snooze/SKILL.md',
@@ -683,7 +677,7 @@ Re-register with the server and launch the watcher.
 4. **Launch the watcher.** Use the Bash tool with \`run_in_background: true\`
    and \`timeout: 600000\`:
    \`\`\`bash
-   RESULT=$(curl --max-time 591 -sf${authHeader} "${localBaseUrl}/api/watch?instance=INSTANCE&sessionToken=TOKEN"); echo "$RESULT"
+   RESULT=$(curl -sf${authHeader} "${localBaseUrl}/api/watch?instance=INSTANCE&sessionToken=TOKEN"); echo "$RESULT"
    \`\`\`
    (Replace INSTANCE and TOKEN with the values from steps 1 and 3.)
 
