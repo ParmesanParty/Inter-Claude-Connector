@@ -217,7 +217,7 @@ describe('MCP tool: respondToMessage routing', () => {
   });
 
   it('falls back to prefix match when exact lookup fails', async () => {
-    const { peerFn, localFn, calls } = createMockAPIs();
+    const { peerFn, calls } = createMockAPIs();
     const lookupCalls: { method: string; path: string }[] = [];
     const smartLocalFn = async (method: string, path: string, _body?: any) => {
       lookupCalls.push({ method, path });
@@ -244,7 +244,7 @@ describe('MCP tool: respondToMessage routing', () => {
   });
 
   it('prefix match routes to peer when sender is remote', async () => {
-    const { peerFn, localFn, calls } = createMockAPIs();
+    const { peerFn, calls } = createMockAPIs();
     const smartLocalFn = async (method: string, path: string, _body?: any) => {
       if (method === 'GET' && path.startsWith('/api/inbox/') && !path.includes('?')) {
         throw new Error('not found');
@@ -267,7 +267,7 @@ describe('MCP tool: respondToMessage routing', () => {
   });
 
   it('defaults to local when all lookups fail and no peers', async () => {
-    const { peerFn, localFn, calls } = createMockAPIs();
+    const { peerFn } = createMockAPIs();
     const failingLocalFn = async (method: string, _path: string, _body?: any) => {
       if (method === 'GET') throw new Error('not found');
       return { id: 'local-id' };
@@ -376,20 +376,18 @@ describe('MCP tool: sendMessage threading', () => {
   });
 
   it('inherits threadId from parent message on reply', async () => {
-    const { peerFn, calls } = createMockAPIs();
+    const { peerFn } = createMockAPIs();
     const parentThreadId = 'parent-thread-uuid-1234';
-    const localFn = async (method: string, path: string, body?: any) => {
+    const localFn = async (method: string, path: string, _body?: any) => {
       if (method === 'GET' && path.startsWith('/api/inbox/')) {
         return { message: { id: 'parent-msg', from: 'test-host/x', threadId: parentThreadId } };
       }
       return { id: 'new-msg-id' };
     };
     const handlers = createToolHandlers({} as unknown as ICCClient, peerFn, localFn);
+    // The localFn was used for both GET (lookup) and POST (send);
+    // we assert indirectly by requiring sendMessage to complete without throwing.
     await handlers.sendMessage({ body: 'reply', to: 'test-host/app', replyTo: 'parent-msg' });
-
-    const postCall = (await Promise.resolve(calls)).peer.length === 0;
-    // The localFn was used for both GET (lookup) and POST (send)
-    // We check indirectly via the response text
   });
 });
 
@@ -437,9 +435,7 @@ describe('MCP tool: sendMessage multicast', () => {
   });
 
   it('handles partial failures gracefully', async () => {
-    let callCount = 0;
-    const peerFn = async (peer: string, method: string, path: string, body?: any) => {
-      callCount++;
+    const peerFn = async (peer: string, _method: string, _path: string, _body?: any) => {
       if (peer === 'venus') throw new Error('peer offline');
       return { id: 'ok-id' };
     };
@@ -473,7 +469,7 @@ describe('MCP tool: sendMessage multicast', () => {
 
 describe('MCP tool: respondToMessage threading', () => {
   it('includes threadId in reply payload', async () => {
-    const { peerFn, calls } = createMockAPIs();
+    const { peerFn } = createMockAPIs();
     const localCalls: { method: string; path: string; body?: any }[] = [];
     const localFn = async (method: string, path: string, body?: any) => {
       localCalls.push({ method, path, body });
