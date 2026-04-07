@@ -25,7 +25,22 @@ No new files. No public API changes. No changes to `docs/`, `bin/icc.ts`'s watch
 
 ---
 
+## Verified preconditions
+
+These were checked against current `main` (2026-04-07) before the plan was finalized; the implementing agent does not need to re-verify but should be aware:
+
+- **`/api/health` requires no auth** — `src/server.ts:377` handles it before any auth gate. `hookGet` MUST NOT send an `Authorization` header for this path (sending one is harmless but irrelevant; relying on auth would be wrong).
+- **`request` from `node:http` is already imported** at `bin/icc.ts:7`. `hookGet` reuses the existing import; do not add a duplicate.
+- **`httpJSON` test helper has no built-in timeout** in `test/helpers.ts`. Task 1 adds one (see Step 0 below) so the stale-token tests don't hang and so future tests inherit the protection.
+
+---
+
 ## Task 1: Server `/api/watch` — return 410 on unknown session token
+
+- [ ] **Step 0: Bake a default timeout into `httpJSON` helper**
+
+Open `test/helpers.ts` and find `httpJSON`. Add a default 2000ms timeout to the underlying `http.request` options (`timeout: opts?.timeout ?? 2000`) and a `req.on('timeout', () => { req.destroy(new Error('httpJSON timeout')); })` handler. This prevents the stale-token test (and every future test) from hanging when the server hangs instead of responding. Run the existing test suite once to confirm no regressions: `node --test test/*.test.ts 2>&1 | tail -5`.
+
 
 **Files:**
 - Modify: `src/server.ts` (the `/api/watch` handler around line 1226-1233)
@@ -71,7 +86,7 @@ node --test test/server.test.ts 2>&1 | grep -A2 'stale-token'
 
 Expected: FAIL with `status !== 410` (the current handler accepts the stale token and would hang; `httpJSON` must have a timeout — if the request hangs, that also counts as "current behavior is wrong").
 
-**If `httpJSON` does not have a timeout and the test hangs:** add a timeout wrapper in the test itself. Wrap the `httpJSON` calls with `Promise.race([..., new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 500))])`.
+(Step 0 above already added the helper-level timeout, so the test will fail with a timeout error rather than hanging.)
 
 - [ ] **Step 3: Write the minimal implementation**
 
@@ -228,6 +243,8 @@ to:
 
 The only change on that line is `curl -sf` → `curl -s` (drop the `-f` so the 410 body reaches the skill output).
 
+**Note on `-f` asymmetry between this task and Task 4:** Task 4 keeps `curl -sf` on the `/api/health` pre-check because the health check only needs the exit code (no body parsing). This task drops `-f` on the watch invocation because the skill *must* see the `stale_token` body to branch on it. The two are not in tension.
+
 Then replace the existing step 7 block:
 
 ```js
@@ -305,15 +322,25 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { runHook, createTmpHome, withServer } from './helpers.ts';
 
+// NOTE: This test asserts the EXACT wording of the unreachable hint and the
+// connected hint. These strings are user-facing and also referenced verbatim by
+// Task 4's Docker hook template test. Any wording change must update:
+//   1. bin/icc.ts `case 'startup':` (both the pre-check fallback and the
+//      server-not-reachable branch of the hookRequest path)
+//   2. src/server.ts Docker SessionStart startup/resume/clear command templates
+//   3. This test AND the test in Task 4
+// All in the same commit. Do not introduce wording drift across the two paths.
+const UNREACHABLE_HINT = 'ICC: server not reachable. Run /mcp to reconnect, then /watch to activate.';
+
 describe('hook startup MCP health pre-check', () => {
   it('emits unreachable hint and skips registration when server is down', async () => {
     const tmpHome = createTmpHome();
     // No server running — hook should fail health check.
-    const { stdout, stderr } = await runHook('startup', { HOME: tmpHome, ICC_PORT: '39999' });
-    assert.match(stdout, /server not reachable/);
-    assert.match(stdout, /Run \/mcp to reconnect/);
-    // Should not have written a session instance file for the current PID.
-    // (Indirect assertion: the file check is in the test helpers.)
+    const { stdout } = await runHook('startup', { HOME: tmpHome, ICC_PORT: '39999' });
+    assert.ok(
+      stdout.includes(UNREACHABLE_HINT),
+      `stdout must contain the exact unreachable hint; got: ${JSON.stringify(stdout)}`
+    );
   });
 
   it('proceeds with normal registration when server responds to /api/health', async () => {
@@ -323,8 +350,8 @@ describe('hook startup MCP health pre-check', () => {
         HOME: tmpHome,
         ICC_PORT: String(port),
       });
-      assert.match(stdout, /ICC: connected/);
-      assert.doesNotMatch(stdout, /server not reachable/);
+      assert.match(stdout, /^ICC: connected, \d+ unread\. Run \/watch to activate\.$/m);
+      assert.ok(!stdout.includes(UNREACHABLE_HINT), 'must not emit unreachable hint on healthy server');
     });
   });
 });
@@ -336,9 +363,7 @@ describe('hook startup MCP health pre-check', () => {
 node --test test/hooks.test.ts 2>&1 | grep -A2 'MCP health pre-check'
 ```
 
-Expected: FAIL — the existing startup hook does not emit "server not reachable" on a down server (it emits `ICC: server not reachable. Run /watch to activate when ready.` which is different wording).
-
-**Note:** if the existing wording already includes "server not reachable", adjust the test's regex to match the new specific wording the spec requires: `/ICC: server not reachable\. Run \/mcp to reconnect, then \/watch to activate\./`.
+Expected: FAIL — the existing startup hook emits the old wording `ICC: server not reachable. Run /watch to activate when ready.` which does not match the exact string `UNREACHABLE_HINT` constant defined in the test. The implementation in Step 4 updates the wording to match.
 
 - [ ] **Step 3: Add the `hookGet` helper**
 
@@ -352,10 +377,13 @@ Open `bin/icc.ts`. Find the `hookRequest` function at line 530. Immediately belo
  * short so it does not delay a healthy SessionStart.
  */
 async function hookGet(path: string): Promise<any> {
+  // NOTE: `request` (from node:http) is already imported at the top of bin/icc.ts
+  // — do not re-import. /api/health requires no auth (verified in src/server.ts),
+  // so we send no Authorization header. If you extend hookGet to other endpoints
+  // later, decide auth on a per-call basis.
   const { loadConfig, getTlsOptions, createIdentityVerifier } = await import('../src/config.ts');
   const config = loadConfig();
   const port = config.server.port;
-  const authToken = config.server.localToken;
   const tlsOpts = getTlsOptions(config);
   const requestFn = tlsOpts
     ? (await import('node:https')).request
@@ -369,9 +397,6 @@ async function hookGet(path: string): Promise<any> {
       method: 'GET',
       timeout: 1000,
       ...(tlsOpts ? { ...tlsOpts, checkServerIdentity: createIdentityVerifier(config.identity) } : {}),
-      headers: {
-        ...(authToken && { 'Authorization': `Bearer ${authToken}` }),
-      },
     }, (res: any) => {
       if (res.statusCode && (res.statusCode < 200 || res.statusCode >= 300)) {
         res.resume();
@@ -490,16 +515,14 @@ server calls with a 1-second timeout."
 - Modify: `src/server.ts` (the `/setup/claude-code` response payload, `hooks.SessionStart[0|1|3].hooks[0].command` entries around lines 445-500)
 - Test: `test/server.test.ts` (append)
 
-- [ ] **Step 1: Locate the current template strings**
-
-Read `src/server.ts` around lines 440-520 to find the three `SessionStart` hook command entries (matchers `startup`, `resume`, `clear`). Note their current shape — each is a single-line curl POST to `/api/hook/startup` with `Authorization: Bearer` and the `$(basename $PWD)` instance arg.
+- [ ] **Step 1: Locate the current template strings and record their exact shape**
 
 Run:
 ```bash
 grep -n 'api/hook/startup' /home/albertnam/code/inter-claude-connector/src/server.ts
 ```
 
-Expected: at least 3 lines in the `hooks.SessionStart[*].command` template strings (plus possibly one reference in documentation or comments).
+Expected: at least 3 lines in the `hooks.SessionStart[*].command` template strings (plus possibly one reference in documentation or comments). Then read the surrounding context for each match (use `Read` with an `offset` and `limit` around each line number) and **copy the literal current `command:` string for each of the three matchers (`startup`, `resume`, `clear`) into a scratch note before proceeding.** Step 4 below shows an assumed "current shape" for the edit, but the actual on-disk string may differ (formatting, argument order, quoting, or recent edits). You MUST diff the assumed shape against the literal current strings before writing the edit — if they differ, transform the actual strings, not the template in this plan.
 
 - [ ] **Step 2: Write the failing test**
 
@@ -519,9 +542,10 @@ describe('/setup/claude-code hooks template: health pre-check', () => {
           command.includes('/api/health'),
           `${matcher} command must include /api/health pre-check; got: ${command}`
         );
+        // Must match exact wording from bare-metal hook (Task 3). Keep in sync.
         assert.ok(
-          command.includes('server not reachable'),
-          `${matcher} command must emit unreachable hint on health failure; got: ${command}`
+          command.includes('ICC: server not reachable. Run /mcp to reconnect, then /watch to activate.'),
+          `${matcher} command must emit exact unreachable hint on health failure; got: ${command}`
         );
         assert.ok(
           command.includes('exit 0'),
@@ -549,7 +573,7 @@ Expected: FAIL — no `/api/health` substring in any SessionStart command.
 
 Open `src/server.ts`. For each of the three `SessionStart` matchers (`startup`, `resume`, `clear`), find the `command:` string and update it as follows.
 
-**Current shape (from the earlier edit to docs/docker.md, so this is the target):**
+**Assumed current shape** (verify against your Step 1 scratch note before applying — if the real strings differ, transform those instead):
 
 ```ts
 command: `curl -sf -X POST ${localBaseUrl}/api/hook/startup${authHeader} -H 'Content-Type: application/json' -d '{"instance":"'"$(basename $PWD)"'"}'`,
@@ -635,7 +659,8 @@ merged to main. For Docker verification, please:
 
 1. git pull (or wait for sub-project A to land and docker compose pull)
 2. Re-fetch /setup/claude-code and re-apply the /watch skill + hook
-   templates. Until sub-project B's /sync ships, this is manual:
+   templates. **This manual reapply step exists only until sub-project B's
+   /sync ships — do not bake it into muscle memory.** Until then:
    curl -H "Authorization: Bearer $(docker exec icc cat /home/icc/.icc/config.json | grep -oP '"localToken"\s*:\s*"\K[^"]+')" http://localhost:3178/setup/claude-code
 3. Write the returned skills.watch.content to ~/.claude/skills/watch/SKILL.md
 4. Update the SessionStart startup/resume/clear hooks in

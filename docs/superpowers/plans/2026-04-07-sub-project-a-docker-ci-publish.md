@@ -35,6 +35,16 @@ No code changes elsewhere. `docker-compose.yml` already references `image: parme
 
 ---
 
+## Task 0: Confirm `ubuntu-24.04-arm` runner label is available
+
+GitHub's free arm64 runner labels have shifted over time (`ubuntu-24.04-arm`, `ubuntu-22.04-arm64`, etc.) and availability depends on org tier. **If this label is wrong, the first workflow run fails at job-startup with a "no runners matched" error and you'll waste time chasing the secrets layer.**
+
+- [ ] **Step 1: Verify the label is current**
+
+Open https://docs.github.com/en/actions/using-github-hosted-runners/about-github-hosted-runners/about-github-hosted-runners (or `gh api /repos/ParmesanParty/Inter-Claude-Connector/actions/runners` for org-specific runners). Confirm `ubuntu-24.04-arm` is the current public arm64 label. If GitHub has renamed it (e.g. to `ubuntu-24.04-arm64`), update Task 1 Step 2's `matrix.include[1].runner` value before writing the file. If your org has no entitlement for free arm64 runners, escalate to the user — this plan cannot proceed without one.
+
+---
+
 ## Task 1: Create the workflow file with build matrix and manifest merge
 
 **Files:**
@@ -198,11 +208,15 @@ Wait for confirmation before proceeding to Task 3. If the user has not added the
 
 - [ ] **Step 2: Push the workflow to `main` to trigger the first run**
 
+Capture the SHA *before* pushing so Task 3 can find this run unambiguously (avoids racing against unrelated workflow runs):
+
 ```bash
+PUSH_SHA=$(git rev-parse HEAD)
+echo "Pushing $PUSH_SHA"
 git push origin main
 ```
 
-Expected: workflow run appears in https://github.com/ParmesanParty/Inter-Claude-Connector/actions within a few seconds.
+Expected: workflow run appears in https://github.com/ParmesanParty/Inter-Claude-Connector/actions within a few seconds. Remember `$PUSH_SHA` for Task 3.
 
 ---
 
@@ -210,15 +224,16 @@ Expected: workflow run appears in https://github.com/ParmesanParty/Inter-Claude-
 
 - [ ] **Step 1: Watch the first workflow run to completion**
 
-Run:
+Find the run by commit SHA (not by `--limit=1`, which can pick up unrelated runs):
 ```bash
-gh run watch --exit-status $(gh run list --workflow=docker-publish.yml --limit=1 --json databaseId --jq '.[0].databaseId')
+RUN_ID=$(gh run list --workflow=docker-publish.yml --commit="$PUSH_SHA" --json databaseId --jq '.[0].databaseId')
+gh run watch --exit-status "$RUN_ID"
 ```
 
 Expected: `✓ main Publish Docker image · <run-id>` within ~5 minutes (native builds, cold cache).
 
 If it fails:
-- Read the failure: `gh run view --log-failed $(gh run list --workflow=docker-publish.yml --limit=1 --json databaseId --jq '.[0].databaseId')`
+- Read the failure: `gh run view --log-failed "$RUN_ID"`
 - Common failures: (a) missing secrets → back to Task 2; (b) Docker Hub PAT insufficient scope → regenerate with Read+Write+Delete; (c) YAML syntax → revert the push, fix locally, repeat Task 2
 
 - [ ] **Step 2: Verify the multi-arch manifest on Docker Hub**
@@ -260,10 +275,6 @@ grep -rn "compose up -d --build" ~/.claude/projects/-home-albertnam-code-inter-c
 
 Expected after fix: no results.
 
-- [ ] **Step 6: Final commit if any memory changes were made**
-
-Memory files are not part of the repo — they live under `~/.claude/`, no git commit needed. Skip this step if no memory updates were required.
-
 ---
 
 ## Task 4: Verify tag-driven path with a throwaway tag (optional smoke test)
@@ -272,16 +283,23 @@ Only run this task if Task 3 succeeded and you want to confirm the semver path w
 
 - [ ] **Step 1: Create and push a throwaway tag**
 
+Capture the tag's target SHA before pushing so Step 2 can find this run unambiguously (same reasoning as Task 3 Step 1 — `--limit=1` races against unrelated workflow runs):
+
 ```bash
 git tag v0.0.0-citest
+TAG_SHA=$(git rev-parse v0.0.0-citest^{commit})
+echo "Tag points at $TAG_SHA"
 git push origin v0.0.0-citest
 ```
 
 - [ ] **Step 2: Watch the workflow run**
 
 ```bash
-gh run watch --exit-status $(gh run list --workflow=docker-publish.yml --event=push --limit=1 --json databaseId --jq '.[0].databaseId')
+RUN_ID=$(gh run list --workflow=docker-publish.yml --commit="$TAG_SHA" --json databaseId,headBranch --jq '[.[] | select(.headBranch=="v0.0.0-citest")][0].databaseId')
+gh run watch --exit-status "$RUN_ID"
 ```
+
+(The `headBranch` filter disambiguates from the `push-to-main` run on the same SHA if the tag happens to point at a commit that's also on `main`.)
 
 Expected: another successful run.
 
@@ -302,14 +320,7 @@ git push origin :refs/tags/v0.0.0-citest
 
 - [ ] **Step 5: Delete the throwaway tag on Docker Hub**
 
-Either via the Docker Hub web UI (https://hub.docker.com/r/parmesanparty/icc/tags) or via:
-
-```bash
-curl -s -H "Authorization: JWT $(curl -s -X POST https://hub.docker.com/v2/users/login/ -H 'Content-Type: application/json' -d "{\"username\":\"parmesanparty\",\"password\":\"<PAT>\"}" | jq -r .token)" \
-  -X DELETE "https://hub.docker.com/v2/repositories/parmesanparty/icc/tags/0.0.0-citest/"
-```
-
-(Replace `<PAT>` with the same Docker Hub PAT used by CI. Web UI is easier.)
+Use the Docker Hub web UI: https://hub.docker.com/r/parmesanparty/icc/tags — find `0.0.0-citest`, click Delete. (The API path exists but shell-quoting a PAT inside nested curl heredocs is fragile if the PAT contains `$` or backticks. The web UI is one click; use it.)
 
 ---
 
