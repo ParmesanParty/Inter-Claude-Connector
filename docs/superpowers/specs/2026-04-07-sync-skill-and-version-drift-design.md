@@ -20,6 +20,24 @@ After this work:
 - A `/sync` slash skill applies updates one command, with safe handling for files the user has hand-edited
 - A clear summary tells the user exactly what — if anything — needs a restart to take effect
 
+## Amendment: unified bare-metal + Docker `/setup/claude-code` (2026-04-07, Path B)
+
+The original draft assumed `/setup/claude-code` already served mode-appropriate content for each host. Code inspection revealed it currently serves **Docker-flavored content only** — hardcoded curl-based hooks and `/tmp/icc-session-$PPID.token` skill references. Bare-metal hosts install integration files statically from `docs/claude-code-setup.md`, not from the server endpoint, so the two code paths have never been unified.
+
+The user has chosen to unify them now rather than scope sub-project B to Docker only. This adds:
+
+- **Mode detection in the `/setup/claude-code` payload builder.** When `config.server.localhostHttpPort` is set, the host is running in Docker mode (two-listener split: mTLS peer port + plain-HTTP localhost port). Otherwise, the host is running in bare-metal mode (single mTLS listener, local hooks use mTLS loopback via `icc hook <subcmd>`).
+- **Two content variants of the `hooks`, `skills`, and relevant doc strings**, selected at payload-build time based on the detected mode. The `claudeMd.content` string is host-agnostic and shared across both modes (no paths inside it).
+- **Bare-metal `hooks` template:** uses `icc hook startup`, `icc hook check`, `icc hook shutdown`, `icc hook watch`, etc. — the existing subcommands that already exist in `bin/icc.ts`. No curl, no Bearer header.
+- **Bare-metal `skills` template:** simpler than the Docker variants because the `icc hook` CLI handles token management internally. `/watch` launches `icc hook watch` via `Bash run_in_background: true` and reads output for the `[ICC] Mail received` marker; `/snooze` and `/wake` are single-line CLI calls.
+- **`/sync` skill, two variants:**
+  - *Docker:* uses curl directly against `localhost:3178` (no mTLS; Bearer header for auth)
+  - *Bare-metal:* invokes a new `icc hook sync` CLI subcommand, which internally does the mTLS-loopback HTTP call, handles manifest I/O, computes owned-region hashes, and reports results. The skill becomes a thin wrapper around that subcommand.
+- **`docs/claude-code-setup.md` §2 (hooks) and §4 (skills) become fully redundant** with the server-templated versions after this amendment. We keep the doc for readability of the manual setup flow but add a banner noting that the authoritative source is now `/setup/claude-code` and suggesting `/sync` for ongoing reconciliation. The doc content must match the bare-metal template in the server payload so first-run wizard setup doesn't diverge from subsequent `/sync` operations.
+- **Version hashing is per-mode.** The hash is computed over whatever payload the server emits *for that call*. Two hosts in different modes produce different hashes for equivalent configurations; this is correct — the hash reflects what the client will actually see and apply.
+
+**Why this is worth the extra scope:** after the amendment, there is a single source of truth for ICC integration files on every host regardless of deployment mode. The static `docs/claude-code-setup.md` integration content becomes a readability convenience rather than a duplicate source that can drift from the server. Future changes to hook commands, skill content, or CLAUDE.md instructions land in one place (`src/server.ts`) and propagate to every host via `/sync`.
+
 ## Non-goals
 
 - Three-way merge of hand-edited files (we detect, prompt, and let the user manually diff)
