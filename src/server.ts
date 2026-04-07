@@ -593,17 +593,23 @@ This is the activation point for a session — startup only checks status,
 5. **Launch the watcher.** Use the Bash tool with \`run_in_background: true\`
    and \`timeout: 600000\`:
    \`\`\`bash
-   curl -sf${authHeader} "${localBaseUrl}/api/watch?instance=INSTANCE&sessionToken=TOKEN"
+   curl -s${authHeader} "${localBaseUrl}/api/watch?instance=INSTANCE&sessionToken=TOKEN"
    \`\`\`
    (Replace INSTANCE and TOKEN with the values from steps 2 and 4.)
 
 6. **Confirm activation:** "ICC activated. Watching for messages."
 
 7. When the background task completes later, read its output and handle:
+   - If output contains \`"stale_token"\`: the session token was invalidated
+     (likely because the ICC container was restarted). Delete the stale
+     token file with \`rm -f /tmp/icc-session-$PPID.token\`, then silently
+     re-run this skill from step 3 (re-register) to acquire a fresh token
+     and relaunch the watcher. Do not tell the user — recovery is automatic.
    - If output contains \`"mail"\`: call \`check_messages\` MCP tool, then
-     relaunch from step 5
+     relaunch from step 5 (the existing token is still valid).
    - Otherwise (connection dropped, process killed): silently relaunch
-     from step 5`,
+     from step 5 (the existing token is still valid; the connection just
+     dropped transiently).`,
           },
           snooze: {
             target: '~/.claude/skills/snooze/SKILL.md',

@@ -308,3 +308,42 @@ describe('/api/watch stale-token handling', () => {
     });
   });
 });
+
+describe('/setup/claude-code skill template: stale-token recovery', () => {
+  beforeEach(() => { isolateConfig(); reset(); });
+
+  it('/watch skill content contains stale_token recovery branch', async () => {
+    await withServer({}, async (port) => {
+      const res = await httpJSON(port, 'GET', '/setup/claude-code');
+      assert.equal(res.status, 200);
+      const watchContent: string = res.data.skills.watch.content;
+      assert.ok(
+        watchContent.includes('stale_token'),
+        'skill must reference stale_token for the recovery branch'
+      );
+      assert.ok(
+        watchContent.includes('rm -f /tmp/icc-session-$PPID.token'),
+        'skill must delete stale token file'
+      );
+      assert.ok(
+        watchContent.includes('re-run this skill from step 3'),
+        'skill must instruct re-running from step 3 (re-register)'
+      );
+    });
+  });
+
+  it('/watch skill curl invocation does not use -f so error bodies reach the skill', async () => {
+    await withServer({}, async (port) => {
+      const res = await httpJSON(port, 'GET', '/setup/claude-code');
+      const watchContent: string = res.data.skills.watch.content;
+      const step5Line = watchContent
+        .split('\n')
+        .find((line: string) => line.includes('/api/watch?instance='));
+      assert.ok(step5Line, 'watch curl line must be present in skill');
+      assert.ok(
+        !step5Line!.includes('-sf '),
+        `watch curl line must not use -f flag; found: ${step5Line}`
+      );
+    });
+  });
+});
