@@ -266,7 +266,7 @@ describe('GET /api/watch', () => {
     });
   });
 
-  it('wakes on new inbox message', async () => {
+  it('wakes on new inbox message', { timeout: 5000 }, async () => {
     await withServer({}, async (port) => {
       // Mark all messages read first
       await httpJSON(port, 'POST', '/api/inbox/mark-read', { all: true });

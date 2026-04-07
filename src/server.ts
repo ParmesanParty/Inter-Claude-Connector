@@ -1209,7 +1209,7 @@ Re-register with the server and launch the watcher.
       return;
     }
 
-    // GET /api/watch — long-poll endpoint for mail watcher
+    // GET /api/watch — long-poll endpoint for mail watcher (uncapped lifetime)
     if (method === 'GET' && url === '/api/watch') {
       const queryUrl = new URL(req.url || '/', 'http://localhost');
       const instance = queryUrl.searchParams.get('instance');
@@ -1220,31 +1220,49 @@ Re-register with the server and launch the watcher.
         return;
       }
 
-      // Duplicate guard: check if a watcher is already connected for this session
-      if (sessionToken && activeWatchers.has(sessionToken)) {
-        sendJSON(res, 200, { event: 'duplicate' });
-        return;
-      }
-
-      // Reconnect session if token provided (handles watcher cycle relaunch)
+      // Duplicate guard: atomically check-and-reserve the session slot.
+      // Node's single-threaded model makes the check/set pair atomic as long
+      // as no await intervenes between them. A future refactor that adds an
+      // await here would reintroduce a TOCTOU race.
+      //
+      // Note: sessionReconnect clears grace/purgatory timers and promotes
+      // state to ACTIVE (see src/registry.ts:268). It must NOT run for
+      // duplicate watchers — doing so would let a second watcher's request
+      // clear timers belonging to the first, already-connected watcher.
       if (sessionToken) {
+        if (activeWatchers.has(sessionToken)) {
+          sendJSON(res, 200, { event: 'duplicate' });
+          return;
+        }
+        activeWatchers.set(sessionToken, res);
         sessionReconnect(sessionToken);
       }
 
-      // Immediate inbox check — return immediately if unread messages exist
+      // Immediate inbox check — return immediately if unread messages exist.
+      // Release the reserved slot first so the next watcher can claim it.
       const unread = getUnread();
       const realUnread = unread.filter(m => !isReceipt(m));
       if (realUnread.length > 0) {
+        if (sessionToken) activeWatchers.delete(sessionToken);
         sendJSON(res, 200, { event: 'mail', unreadCount: realUnread.length });
         return;
       }
 
-      // Long-poll: block until message arrives or timeout
-      const WATCH_TIMEOUT_MS = 585_000; // 585s (< curl's 591s to prevent timeout race)
+      // Long-poll: block indefinitely until a message arrives or the client
+      // disconnects. No server-side timeout; watcher lifetime is bounded
+      // only by the client process (icc hook watch) and its PID/signal
+      // monitoring.
+      //
+      // Enable OS-level TCP keepalive so the kernel sends ACK probes on
+      // otherwise-idle connections. This defeats any idle-timeout reapers
+      // at intermediate network hops without touching the HTTP body, so
+      // clients that JSON.parse the full response keep working unchanged.
+      req.socket.setKeepAlive(true, 30_000);
 
-      if (sessionToken) {
-        activeWatchers.set(sessionToken, res);
-      }
+      // Declare unsubscribe as a mutable binding BEFORE cleanup references
+      // it, to avoid a TDZ error if inboxSubscribe ever fires its callback
+      // synchronously during registration.
+      let unsubscribe: () => void = () => {};
 
       const cleanup = () => {
         if (sessionToken) {
@@ -1252,20 +1270,13 @@ Re-register with the server and launch the watcher.
           onWatcherDisconnect(sessionToken);
         }
         unsubscribe();
-        clearTimeout(timer);
       };
 
-      const unsubscribe = inboxSubscribe((msg) => {
+      unsubscribe = inboxSubscribe((msg) => {
         if (isReceipt(msg)) return; // Don't wake on receipts
         cleanup();
         sendJSON(res, 200, { event: 'mail', unreadCount: 1 });
       });
-
-      const timer = setTimeout(() => {
-        cleanup();
-        sendJSON(res, 200, { event: 'timeout' });
-      }, WATCH_TIMEOUT_MS);
-      timer.unref();
 
       // Connection close handler (client disconnect)
       req.on('close', () => {
