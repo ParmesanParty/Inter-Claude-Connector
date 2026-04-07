@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { readFileSync, writeFileSync, mkdirSync, existsSync, unlinkSync, readdirSync, chmodSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync, existsSync, unlinkSync, readdirSync, chmodSync, renameSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { randomBytes } from 'node:crypto';
@@ -609,6 +609,311 @@ async function hookGet(path: string): Promise<any> {
   });
 }
 
+// ─────────────────────────────────────────────────────────────────────
+// hook sync (Plan B Task 11) — reconcile local config against server
+// ─────────────────────────────────────────────────────────────────────
+function setSubtree(obj: any, dottedPath: string, value: unknown): void {
+  const keys = dottedPath.split('.');
+  const lastKey = keys.pop()!;
+  let cur = obj;
+  for (const k of keys) {
+    if (cur[k] === undefined || cur[k] === null || typeof cur[k] !== 'object') cur[k] = {};
+    cur = cur[k];
+  }
+  cur[lastKey] = value;
+}
+
+interface SyncTarget {
+  manifestKey: string;
+  category: 'mcp' | 'hooks' | 'skills' | 'claudeMd';
+  filePath: string;
+  currentHash: string | null;
+  proposedHash: string;
+  apply: () => void;
+}
+
+async function hookSync(config: any): Promise<void> {
+  const payload: any = await hookGet('/setup/claude-code');
+  if (!payload) {
+    process.stdout.write('ICC: server not reachable. Run /mcp to reconnect, then /watch to activate.\n');
+    return;
+  }
+  const {
+    readManifest, writeManifest,
+    hashJsonSubtree, hashFileContents, hashClaudeMdRegion, extractClaudeMdRegion,
+    wrapClaudeMdWithMarkers,
+  } = await import('../src/manifest.ts');
+  const path = await import('node:path');
+
+  const home = homedir();
+  const manifestPath = join(home, '.icc', `applied-config-manifest.${config.identity}.json`);
+  const manifest = readManifest(manifestPath); // null on missing or malformed
+
+  const expand = (p: string) => p.startsWith('~/') ? join(home, p.slice(2)) : p;
+
+  const targets: SyncTarget[] = [];
+
+  // Helper: returns null when the dotted subtree is missing in obj.
+  const safeJsonHash = (obj: any, dotted: string): string | null => {
+    const keys = dotted.split('.');
+    let cur: any = obj;
+    for (const k of keys) {
+      if (cur === null || typeof cur !== 'object' || !(k in cur)) return null;
+      cur = cur[k];
+    }
+    return hashJsonSubtree(obj, dotted);
+  };
+
+  // 1) ~/.claude.json :: mcpServers.icc
+  {
+    const filePath = expand(payload.mcp.target);
+    const dotted = payload.mcp.mergeKey as string;
+    let existing: any = {};
+    try { existing = JSON.parse(readFileSync(filePath, 'utf8')); } catch { existing = {}; }
+    const currentHash = safeJsonHash(existing, dotted);
+    const proposed = JSON.parse(JSON.stringify(existing));
+    setSubtree(proposed, dotted, payload.mcp.config);
+    const proposedHash = hashJsonSubtree(proposed, dotted);
+    // currentHash for "missing subtree" — when subtree absent, hash is hash of undefined.
+    // We need to know "first sync of this file" → manifest entry absence handles that.
+    targets.push({
+      manifestKey: `${payload.mcp.target}::${dotted}`,
+      category: 'mcp',
+      filePath,
+      currentHash,
+      proposedHash,
+      apply: () => {
+        let cur: any = {};
+        try { cur = JSON.parse(readFileSync(filePath, 'utf8')); } catch { cur = {}; }
+        setSubtree(cur, dotted, payload.mcp.config);
+        mkdirSync(path.dirname(filePath), { recursive: true });
+        const tmp = `${filePath}.tmp.${process.pid}.${Date.now()}`;
+        writeFileSync(tmp, JSON.stringify(cur, null, 2) + '\n');
+        renameSync(tmp, filePath);
+      },
+    });
+  }
+
+  // 2) ~/.claude/settings.json :: hooks
+  {
+    const filePath = expand(payload.hooks.target);
+    const dotted = payload.hooks.mergeKey as string;
+    let existing: any = {};
+    try { existing = JSON.parse(readFileSync(filePath, 'utf8')); } catch { existing = {}; }
+    const currentHash = safeJsonHash(existing, dotted);
+    const proposed = JSON.parse(JSON.stringify(existing));
+    setSubtree(proposed, dotted, payload.hooks.config);
+    const proposedHash = hashJsonSubtree(proposed, dotted);
+    targets.push({
+      manifestKey: `${payload.hooks.target}::${dotted}`,
+      category: 'hooks',
+      filePath,
+      currentHash,
+      proposedHash,
+      apply: () => {
+        let cur: any = {};
+        try { cur = JSON.parse(readFileSync(filePath, 'utf8')); } catch { cur = {}; }
+        setSubtree(cur, dotted, payload.hooks.config);
+        mkdirSync(path.dirname(filePath), { recursive: true });
+        const tmp = `${filePath}.tmp.${process.pid}.${Date.now()}`;
+        writeFileSync(tmp, JSON.stringify(cur, null, 2) + '\n');
+        renameSync(tmp, filePath);
+      },
+    });
+  }
+
+  // 3) ~/.claude/CLAUDE.md :: marker region
+  {
+    const filePath = expand(payload.claudeMd.target);
+    let existing = '';
+    try { existing = readFileSync(filePath, 'utf8'); } catch { existing = ''; }
+    const currentHash = hashClaudeMdRegion(existing); // null if no markers
+    const proposedHash = hashFileContents(payload.claudeMd.content.trim());
+    targets.push({
+      manifestKey: `${payload.claudeMd.target}::ICC-region`,
+      category: 'claudeMd',
+      filePath,
+      currentHash,
+      proposedHash,
+      apply: () => {
+        let cur = '';
+        try { cur = readFileSync(filePath, 'utf8'); } catch { cur = ''; }
+        const wrapped = wrapClaudeMdWithMarkers(payload.claudeMd.content);
+        let next: string;
+        if (extractClaudeMdRegion(cur) !== null) {
+          // Replace existing region
+          next = cur.replace(
+            /<!--\s*ICC:BEGIN[^>]*-->[\s\S]*?<!--\s*ICC:END\s*-->/,
+            wrapped,
+          );
+        } else {
+          // Append (B12 will replace this with smarter migration)
+          const sep = cur.length === 0 || cur.endsWith('\n') ? '' : '\n';
+          next = cur + sep + (cur.length > 0 ? '\n' : '') + wrapped + '\n';
+        }
+        mkdirSync(path.dirname(filePath), { recursive: true });
+        const tmp = `${filePath}.tmp.${process.pid}.${Date.now()}`;
+        writeFileSync(tmp, next);
+        renameSync(tmp, filePath);
+      },
+    });
+  }
+
+  // 4) skills
+  for (const skillName of Object.keys(payload.skills) as Array<'watch' | 'snooze' | 'wake'>) {
+    const skill = payload.skills[skillName];
+    if (!skill) continue;
+    const filePath = expand(skill.target);
+    let existing: string | null = null;
+    try { existing = readFileSync(filePath, 'utf8'); } catch { existing = null; }
+    const currentHash = existing === null ? null : hashFileContents(existing);
+    const proposedHash = hashFileContents(skill.content);
+    targets.push({
+      manifestKey: skill.target,
+      category: 'skills',
+      filePath,
+      currentHash,
+      proposedHash,
+      apply: () => {
+        mkdirSync(path.dirname(filePath), { recursive: true });
+        const tmp = `${filePath}.tmp.${process.pid}.${Date.now()}`;
+        writeFileSync(tmp, skill.content);
+        renameSync(tmp, filePath);
+      },
+    });
+  }
+
+  // Classify
+  type Status = 'unchanged' | 'clean-update' | 'hand-edited';
+  interface Classified extends SyncTarget { status: Status; storedHash: string | null; }
+  const classified: Classified[] = targets.map((t) => {
+    const storedHash = manifest?.files?.[t.manifestKey] ?? null;
+    let status: Status;
+    if (storedHash === null) {
+      // First sync of this file (or first sync overall)
+      status = t.proposedHash === t.currentHash ? 'unchanged' : 'clean-update';
+      // For JSON subtree files, "absent subtree" current hash equals hash of
+      // undefined which never matches the proposed hash → clean-update. Good.
+    } else if (t.currentHash === storedHash) {
+      status = t.proposedHash === storedHash ? 'unchanged' : 'clean-update';
+    } else {
+      status = 'hand-edited';
+    }
+    return { ...t, status, storedHash };
+  });
+
+  const handEdited = classified.filter((c) => c.status === 'hand-edited');
+  const cleanUpdates = classified.filter((c) => c.status === 'clean-update');
+
+  // If nothing to do
+  if (handEdited.length === 0 && cleanUpdates.length === 0) {
+    process.stdout.write('ICC: config already in sync. No changes.\n');
+    return;
+  }
+
+  // Prompt for hand-edited files
+  const decisions: Record<string, 'apply' | 'skip'> = {};
+  if (handEdited.length > 0) {
+    process.stdout.write(`\nFound ${handEdited.length} locally-edited file(s):\n`);
+    for (const h of handEdited) {
+      process.stdout.write(`  - ${h.filePath}\n`);
+      process.stdout.write(`    Diff with server: curl -s http://127.0.0.1:${config.server.port}/setup/claude-code | diff - ${h.filePath}\n`);
+    }
+    const readline = await import('node:readline');
+    const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+    const ask = (q: string) => new Promise<string>((resolve) => rl.question(q, resolve));
+    for (const h of handEdited) {
+      const ans = (await ask(`Apply server version to ${h.filePath}? [apply/skip/abort] `)).trim().toLowerCase();
+      if (ans === 'abort' || ans === 'a') {
+        // Treat 'a' as ambiguous → require full word; safer: only 'abort'
+      }
+      if (ans === 'abort') {
+        rl.close();
+        process.stdout.write('Aborted. No files written.\n');
+        return;
+      }
+      if (ans === 'apply') decisions[h.manifestKey] = 'apply';
+      else decisions[h.manifestKey] = 'skip';
+    }
+    rl.close();
+  }
+
+  // Apply: clean-updates first, then hand-edited "apply" decisions.
+  // Apply loop stops at first error (per-file partial-failure semantics).
+  const applied: Classified[] = [];
+  const failed: { entry: Classified; error: string }[] = [];
+  const skipped: Classified[] = handEdited.filter((h) => decisions[h.manifestKey] === 'skip');
+  const applySet: Classified[] = [
+    ...cleanUpdates,
+    ...handEdited.filter((h) => decisions[h.manifestKey] === 'apply'),
+  ];
+
+  let stopped = false;
+  for (const entry of applySet) {
+    if (stopped) break;
+    try {
+      entry.apply();
+      applied.push(entry);
+    } catch (err: any) {
+      failed.push({ entry, error: err?.message || String(err) });
+      stopped = true;
+    }
+  }
+  // Files that were never attempted because the loop stopped early
+  const notAttempted: Classified[] = stopped
+    ? applySet.slice(applySet.indexOf(failed[0]!.entry) + 1)
+    : [];
+
+  // Update manifest with two-level semantics
+  const priorFiles: Record<string, string> = manifest?.files ? { ...manifest.files } : {};
+  for (const a of applied) {
+    priorFiles[a.manifestKey] = a.proposedHash;
+  }
+  // Skipped / failed / notAttempted: leave entries as-is (preserve prior).
+  const partialFailure = failed.length > 0 || skipped.length > 0;
+  const newVersion = partialFailure ? (manifest?.version ?? null) : (payload.version as string);
+  const newManifest = {
+    version: newVersion,
+    appliedAt: new Date().toISOString(),
+    files: priorFiles,
+  };
+  try {
+    mkdirSync(path.dirname(manifestPath), { recursive: true });
+    writeManifest(manifestPath, newManifest);
+  } catch (err: any) {
+    process.stdout.write(`Warning: failed to write manifest: ${err?.message || err}\n`);
+  }
+
+  // Summary
+  process.stdout.write(`\nApplied (${applied.length} files):\n`);
+  for (const a of applied) process.stdout.write(`  + ${a.filePath}\n`);
+  if (skipped.length > 0) {
+    process.stdout.write(`\nSkipped (${skipped.length} files with local edits):\n`);
+    for (const s of skipped) process.stdout.write(`  - ${s.filePath}\n`);
+  }
+  if (failed.length > 0) {
+    process.stdout.write(`\nFailed (${failed.length} files, re-run /sync to retry):\n`);
+    for (const f of failed) process.stdout.write(`  ! ${f.entry.filePath}: ${f.error}\n`);
+    for (const n of notAttempted) process.stdout.write(`  ? ${n.filePath} (not attempted)\n`);
+  }
+
+  // Restart actions: dedupe by label, skip "No action needed"
+  const cats = payload.restartCategories as any;
+  const labels = new Set<string>();
+  for (const a of applied) {
+    const cat = cats[a.category];
+    if (cat && cat.action !== 'immediate' && cat.label) labels.add(cat.label);
+  }
+  if (labels.size > 0) {
+    process.stdout.write(`\nRestart actions needed:\n`);
+    for (const l of labels) process.stdout.write(`  * ${l}\n`);
+  }
+
+  if (partialFailure && failed.length > 0) {
+    process.stdout.write(`\nPartial failure: manifest kept at prior version. Next /sync will retry failed files.\n`);
+  }
+}
+
 async function hook() {
   const subcommand = positional[0];
   const { resolve: resolveInstance } = await import('../src/instances.ts');
@@ -949,9 +1254,14 @@ async function hook() {
       break;
     }
 
+    case 'sync': {
+      await hookSync(config);
+      break;
+    }
+
     default:
       console.error(`Unknown hook subcommand: ${subcommand}`);
-      console.error('Usage: icc hook <startup|check|shutdown|watch|session-end|subagent-context|pre-bash|pre-icc-message|snooze-watcher|wake-watcher>');
+      console.error('Usage: icc hook <startup|check|shutdown|watch|session-end|subagent-context|pre-bash|pre-icc-message|snooze-watcher|wake-watcher|sync>');
       process.exit(1);
   }
 }
