@@ -163,12 +163,12 @@ describe('setup-config: buildSkillsTemplate (Docker mode)', () => {
     return baseConfig({ localhostHttpPort: 3178, localToken: 'docker-tok' });
   }
 
-  it('emits watch + snooze + wake skills (no sync yet — that comes in B11/B13)', () => {
+  it('emits watch + snooze + wake + sync skills', () => {
     const tpl = buildSkillsTemplate(dockerConfig());
     assert.ok(tpl.watch, 'watch skill required');
     assert.ok(tpl.snooze, 'snooze skill required');
     assert.ok(tpl.wake, 'wake skill required');
-    assert.equal((tpl as any).sync, undefined, 'sync skill not added until B11/B13');
+    assert.ok(tpl.sync, 'sync skill required');
   });
 
   it('watch skill points at correct target path', () => {
@@ -437,5 +437,84 @@ describe('setup-config: buildHooksTemplate Docker drift detection', () => {
     assert.ok(!compactCmd.includes('applied-config-manifest'), 'compact must not read manifest');
     assert.ok(!compactCmd.includes('/api/health'), 'compact must not have health guard');
     assert.match(compactCmd, /\/api\/hook\/heartbeat/);
+  });
+});
+
+describe('setup-config: buildSkillsTemplate sync skill', () => {
+  it('Docker sync skill exists and has correct target path', () => {
+    const tpl = buildSkillsTemplate(baseConfig({ localhostHttpPort: 3178, localToken: 'tok' }));
+    assert.ok((tpl as any).sync, 'sync skill must exist in Docker mode');
+    assert.equal((tpl as any).sync.target, '~/.claude/skills/sync/SKILL.md');
+  });
+
+  it('Docker sync skill has frontmatter', () => {
+    const tpl = buildSkillsTemplate(baseConfig({ localhostHttpPort: 3178, localToken: 'tok' }));
+    const content = (tpl as any).sync.content;
+    assert.match(content, /^---\n/);
+    assert.match(content, /^name: sync/m);
+    assert.match(content, /^description: /m);
+    assert.match(content, /^disable-model-invocation: true/m);
+    assert.match(content, /^user-invocable: true/m);
+  });
+
+  it('Docker sync skill references /setup/claude-code endpoint', () => {
+    const tpl = buildSkillsTemplate(baseConfig({ localhostHttpPort: 3178, localToken: 'tok' }));
+    const content = (tpl as any).sync.content;
+    assert.match(content, /\/setup\/claude-code/);
+  });
+
+  it('Docker sync skill uses jq for manipulation', () => {
+    const tpl = buildSkillsTemplate(baseConfig({ localhostHttpPort: 3178, localToken: 'tok' }));
+    const content = (tpl as any).sync.content;
+    assert.match(content, /\bjq\b/);
+  });
+
+  it('Docker sync skill references the manifest path', () => {
+    const tpl = buildSkillsTemplate(baseConfig({ localhostHttpPort: 3178, localToken: 'tok' }));
+    const content = (tpl as any).sync.content;
+    assert.match(content, /applied-config-manifest/);
+  });
+
+  it('Docker sync skill references restartCategories', () => {
+    const tpl = buildSkillsTemplate(baseConfig({ localhostHttpPort: 3178, localToken: 'tok' }));
+    const content = (tpl as any).sync.content;
+    assert.match(content, /restartCategories/);
+  });
+
+  it('Docker sync skill mentions all managed file targets', () => {
+    const tpl = buildSkillsTemplate(baseConfig({ localhostHttpPort: 3178, localToken: 'tok' }));
+    const content = (tpl as any).sync.content;
+    assert.ok(content.includes('~/.claude.json'), 'must mention ~/.claude.json');
+    assert.ok(content.includes('~/.claude/settings.json'), 'must mention ~/.claude/settings.json');
+    assert.ok(content.includes('~/.claude/CLAUDE.md'), 'must mention ~/.claude/CLAUDE.md');
+    assert.ok(content.includes('~/.claude/skills/'), 'must mention skill file dir');
+  });
+
+  it('Docker sync skill authenticates with Bearer token', () => {
+    const tpl = buildSkillsTemplate(baseConfig({ localhostHttpPort: 3178, localToken: 'docker-tok' }));
+    const content = (tpl as any).sync.content;
+    assert.match(content, /Authorization: Bearer docker-tok/);
+  });
+
+  it('Docker sync skill references hand-edit apply/skip/abort prompts', () => {
+    const tpl = buildSkillsTemplate(baseConfig({ localhostHttpPort: 3178, localToken: 'tok' }));
+    const content = (tpl as any).sync.content;
+    assert.match(content, /apply/);
+    assert.match(content, /skip/);
+    assert.match(content, /abort/);
+  });
+
+  it('bare-metal sync skill exists and invokes "icc hook sync"', () => {
+    const tpl = buildSkillsTemplate(baseConfig());
+    assert.ok((tpl as any).sync, 'sync skill must exist in bare-metal mode');
+    assert.match((tpl as any).sync.content, /icc hook sync/);
+    assert.ok(!(tpl as any).sync.content.includes('curl'), 'bare-metal must not use curl');
+  });
+
+  it('bare-metal sync skill has frontmatter', () => {
+    const tpl = buildSkillsTemplate(baseConfig());
+    const content = (tpl as any).sync.content;
+    assert.match(content, /^---\n/);
+    assert.match(content, /^name: sync/m);
   });
 });

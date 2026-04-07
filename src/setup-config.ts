@@ -122,7 +122,7 @@ export interface SkillsTemplate {
   watch: SkillEntry;
   snooze: SkillEntry;
   wake: SkillEntry;
-  // sync? added in B11/B13
+  sync: SkillEntry;
 }
 
 export function buildSkillsTemplate(config: ICCConfig): SkillsTemplate {
@@ -284,6 +284,130 @@ Re-register with the server and launch the watcher.
 
 5. Confirm: "ICC watcher re-activated."`,
     },
+    sync: {
+      target: '~/.claude/skills/sync/SKILL.md',
+      content: `---
+name: sync
+description: Reconcile local ICC config files against the server's canonical /setup/claude-code payload (Docker mode)
+disable-model-invocation: true
+user-invocable: true
+---
+
+# ICC Sync (Docker)
+
+Reconcile local ICC config files against the server's canonical \`/setup/claude-code\` payload. This is a hand-driven classify-apply-update procedure because Docker hosts have no \`icc\` CLI.
+
+## Background
+
+Managed files (each with its own "owned region"):
+- \`~/.claude.json\` — JSON subtree \`mcpServers.icc\`
+- \`~/.claude/settings.json\` — JSON subtree \`hooks\`
+- \`~/.claude/CLAUDE.md\` — region between \`<!-- ICC:BEGIN -->\` and \`<!-- ICC:END -->\` markers
+- \`~/.claude/skills/watch/SKILL.md\`, \`~/.claude/skills/snooze/SKILL.md\`, \`~/.claude/skills/wake/SKILL.md\`, \`~/.claude/skills/sync/SKILL.md\` — whole files under \`~/.claude/skills/\`
+
+The applied-config manifest is stored at \`~/.icc/applied-config-manifest.<IDENTITY>.json\` and tracks which version of each file was last applied. The sync skill classifies each file as:
+- **unchanged** — current local matches manifest matches server → nothing to do
+- **clean-update** — current local matches manifest but server has a newer version → auto-apply
+- **hand-edited** — current local differs from manifest → prompt the user (apply / skip / abort)
+
+## Steps
+
+1. **Fetch the canonical payload** via the Bash tool:
+   \`\`\`bash
+   curl -sf -H 'Authorization: Bearer ${config.server.localToken}' ${localBaseUrl}/setup/claude-code > /tmp/icc-setup-fetch.json
+   \`\`\`
+   If this fails, stop and tell the user the server is unreachable.
+
+2. **Extract identity and manifest path.** The host identity is not in the setup payload — read it from the local ICC config:
+   \`\`\`bash
+   IDENTITY=$(jq -r .identity ~/.icc/config.json)
+   MANIFEST="$HOME/.icc/applied-config-manifest.$IDENTITY.json"
+   VERSION=$(jq -r .version /tmp/icc-setup-fetch.json)
+   echo "server version: $VERSION"
+   echo "manifest path: $MANIFEST"
+   \`\`\`
+
+3. **Read the stored manifest** (may not exist on first sync):
+   \`\`\`bash
+   if [ -f "$MANIFEST" ]; then
+     STORED_VERSION=$(jq -r .version "$MANIFEST" 2>/dev/null || echo null)
+   else
+     STORED_VERSION=null
+   fi
+   echo "stored version: $STORED_VERSION"
+   \`\`\`
+   If \`STORED_VERSION\` equals \`VERSION\`, the config is already at the server version — but still proceed to per-file classification in case files were hand-edited.
+
+4. **For each managed file, compute three SHA-256 hashes:**
+   - **local hash** — the current content of the local "owned region" (JSON subtree, marker-delimited region, or whole file)
+   - **stored hash** — per-file hash recorded in \`$MANIFEST\` under \`.files["<path>"].hash\` (or empty on first sync)
+   - **server hash** — hash of the server's proposed content from \`/tmp/icc-setup-fetch.json\`
+
+   For JSON subtrees, hash a canonical representation. Example for \`~/.claude.json\`:
+   \`\`\`bash
+   LOCAL=$(jq -cS '.mcpServers.icc // {}' ~/.claude.json 2>/dev/null || echo '{}')
+   LOCAL_HASH=$(printf '%s' "$LOCAL" | sha256sum | awk '{print $1}')
+   SERVER=$(jq -cS '.mcp.config' /tmp/icc-setup-fetch.json)
+   SERVER_HASH=$(printf '%s' "$SERVER" | sha256sum | awk '{print $1}')
+   STORED_HASH=$(jq -r '.files["~/.claude.json"].hash // ""' "$MANIFEST" 2>/dev/null || echo "")
+   \`\`\`
+   Apply the analogous pattern for \`~/.claude/settings.json\` (subtree: \`.hooks\`), the CLAUDE.md marker region, and each skill file.
+
+5. **Classify each file** based on the three hashes:
+   - \`local == server\` → **unchanged** (no-op)
+   - \`local == stored && stored != server\` → **clean-update** (auto-apply)
+   - \`local != stored\` → **hand-edited** (prompt user)
+   - On first sync (\`STORED_VERSION == null\`): if \`local == server\` treat as unchanged; if file is absent or empty treat as clean-update; otherwise treat as hand-edited.
+
+6. **For each hand-edited file**, print the file path, a short diff hint (e.g. \`diff <(...) <(...)\`), and ask the user one of: \`apply\` / \`skip\` / \`abort\`. Collect ALL answers before writing anything.
+
+7. **If any answer is \`abort\`**, print "Aborted. No files written." and exit without touching the manifest.
+
+8. **Otherwise, apply all clean-update and apply-confirmed files** using atomic tempfile + mv:
+
+   - **\`~/.claude.json\`** — replace \`mcpServers.icc\` subtree:
+     \`\`\`bash
+     NEW=$(jq -c '.mcp.config' /tmp/icc-setup-fetch.json)
+     jq --argjson new "$NEW" '.mcpServers.icc = $new' ~/.claude.json > ~/.claude.json.tmp && mv ~/.claude.json.tmp ~/.claude.json
+     \`\`\`
+
+   - **\`~/.claude/settings.json\`** — replace \`hooks\` subtree:
+     \`\`\`bash
+     NEW=$(jq -c '.hooks.config' /tmp/icc-setup-fetch.json)
+     jq --argjson new "$NEW" '.hooks = $new' ~/.claude/settings.json > ~/.claude/settings.json.tmp && mv ~/.claude/settings.json.tmp ~/.claude/settings.json
+     \`\`\`
+
+   - **\`~/.claude/CLAUDE.md\`** — replace the region between \`<!-- ICC:BEGIN -->\` and \`<!-- ICC:END -->\` markers. If markers are absent, append a fresh \`<!-- ICC:BEGIN -->\\n...\\n<!-- ICC:END -->\` block. Use \`sed\` or a small awk script; write via tempfile + mv.
+
+   - **Skill files** under \`~/.claude/skills/\` — write the whole file (content is in \`.skills.<name>.content\` in the fetched payload):
+     \`\`\`bash
+     mkdir -p ~/.claude/skills/sync
+     jq -r '.skills.sync.content' /tmp/icc-setup-fetch.json > ~/.claude/skills/sync/SKILL.md.tmp && mv ~/.claude/skills/sync/SKILL.md.tmp ~/.claude/skills/sync/SKILL.md
+     \`\`\`
+     Repeat for watch, snooze, wake.
+
+9. **Update the manifest** atomically with two-level semantics:
+   - **Per-file hashes:** advance \`.files["<path>"].hash\` for each successful write; preserve the prior hash for skipped/failed files.
+   - **Top-level \`version\`:** advance to \`$VERSION\` only if EVERY file succeeded AND no hand-edited files were skipped; otherwise leave the top-level version unchanged.
+   - Write via tempfile + mv:
+     \`\`\`bash
+     jq --arg v "$VERSION" --arg h "$LOCAL_HASH" '.version = $v | .files["~/.claude.json"].hash = $h' "$MANIFEST" > "$MANIFEST.tmp" && mv "$MANIFEST.tmp" "$MANIFEST"
+     \`\`\`
+     (Generalize for each file; create the manifest with \`{"version":null,"files":{}}\` if missing.)
+
+10. **Print a summary** grouped by \`restartCategories[category].action\` from the payload:
+    - Applied (N files)
+    - Skipped (N files with local edits)
+    - Failed (N files — re-run \`/sync\` to retry)
+    - Restart actions needed: group by action. For each distinct \`action\` in the applied categories, print the category \`label\` (e.g. "Run /mcp", "Restart Claude Code"). Tell the user which action to take now vs. after the session.
+
+## Notes
+
+- Use \`Authorization: Bearer ${config.server.localToken}\` on the initial curl.
+- Shell variables (\`$IDENTITY\`, \`$MANIFEST\`, \`$VERSION\`, \`$STORED_VERSION\`, \`$LOCAL_HASH\`, etc.) are evaluated at step execution time — do not try to precompute them.
+- Always write via tempfile + mv so a failed write never corrupts the target file.
+- If any step fails, stop immediately and report the failure — do NOT advance the manifest.`,
+    },
   };
 }
 
@@ -368,6 +492,36 @@ Re-enable the watcher after a snooze.
    \`\`\`
 
 3. Confirm: "ICC watcher re-activated."`,
+    },
+    sync: {
+      target: '~/.claude/skills/sync/SKILL.md',
+      content: `---
+name: sync
+description: Reconcile local ICC config files against the server's canonical /setup/claude-code payload
+disable-model-invocation: true
+user-invocable: true
+---
+
+# ICC Sync (Bare-metal)
+
+Reconcile local ICC config files (\`~/.claude.json\`, \`~/.claude/settings.json\`, \`~/.claude/CLAUDE.md\`, \`~/.claude/skills/{watch,snooze,wake,sync}/SKILL.md\`) against the server's canonical \`/setup/claude-code\` payload.
+
+## Steps
+
+1. Run via the Bash tool (interactive — it may prompt you for hand-edited files):
+   \`\`\`bash
+   icc hook sync
+   \`\`\`
+
+2. Read the output to the user verbatim. It includes:
+   - Files applied
+   - Files skipped (with local edits)
+   - Failed files (if any)
+   - Restart actions needed
+
+3. If the user sees "Restart Claude Code" in the output, remind them to restart Claude Code when they're done with the current conversation.
+
+4. If the user sees "Run /mcp" in the output, offer to do it after this skill completes.`,
     },
   };
 }
