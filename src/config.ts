@@ -50,6 +50,9 @@ function applyEnvOverrides(config: ICCConfig): ICCConfig {
   if ('ICC_TLS_KEY' in env) config.server.tls.keyPath = env.ICC_TLS_KEY || null;
   if ('ICC_TLS_CA' in env) config.server.tls.caPath = env.ICC_TLS_CA || null;
   if ('ICC_ENROLL_PORT' in env && env.ICC_ENROLL_PORT) config.server.enrollPort = parseInt(env.ICC_ENROLL_PORT, 10);
+  if ('ICC_LOCALHOST_HTTP_PORT' in env && env.ICC_LOCALHOST_HTTP_PORT) {
+    config.server.localhostHttpPort = parseInt(env.ICC_LOCALHOST_HTTP_PORT, 10);
+  }
   return config;
 }
 

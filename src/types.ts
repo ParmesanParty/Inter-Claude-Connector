@@ -43,6 +43,11 @@ export interface ServerConfig {
   tls: TlsConfig;
   enrollPort: number;
   corsOrigins?: string[];
+  // Set in Docker mode (the entrypoint passes the value into createICCServer
+  // and loadConfig populates this from ICC_LOCALHOST_HTTP_PORT). Acts as the
+  // mode discriminator for /setup/claude-code: when non-null the host is
+  // running in Docker, when null/absent it is bare-metal.
+  localhostHttpPort?: number | null;
 }
 
 export interface WebConfig {
