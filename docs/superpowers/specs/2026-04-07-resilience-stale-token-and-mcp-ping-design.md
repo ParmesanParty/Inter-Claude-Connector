@@ -134,33 +134,62 @@ The trailing `\n%{http_code}` appends the HTTP status code to the output on its 
 
 ### Component 3: SessionStart MCP health pre-check
 
+**This component has two independent implementations because bare-metal and Docker use different hook runtimes.** Both produce the same user-visible behavior at session start.
+
+#### Component 3a: Bare-metal — `bin/icc.ts` hook startup
+
 **File:** `bin/icc.ts`, `hook startup` subcommand at line 580.
 
 **Behavior, integrated at the very top of the startup handler, *before* any other work:**
 
-1. Issue `GET /api/health` against `localBaseUrl` (the same URL the rest of the hook commands use — `http://localhost:3179/api/health` on bare-metal, `http://localhost:3178/api/health` on Docker; both already abstracted by existing hook helper code)
-2. Use a 1-second timeout — short enough to be imperceptible on a healthy session, long enough to forgive a slow-starting container
+1. Issue `GET /api/health` against `http://127.0.0.1:${config.server.port}` using the existing `hookRequest` helper's transport (mTLS on bare-metal, plain HTTP on a noAuth dev config)
+2. Use a 1-second timeout — short enough to be imperceptible on a healthy session, long enough to forgive a slow-starting server
 3. **If the call fails** (connection refused, timeout, non-2xx):
-   - Emit `[ICC] Server unreachable — reconnect MCP with /mcp` on stdout
-   - **Skip the rest of startup entirely.** Registration would fail with a less informative error, and stale-PID cleanup does not matter if we are about to abort. Emit a single line: `ICC: server not reachable. Run /mcp to reconnect, then /watch to activate.` (replaces the existing unreachable-server line with one that names the recovery action).
+   - Emit `ICC: server not reachable. Run /mcp to reconnect, then /watch to activate.` on stdout
+   - **Skip the rest of startup entirely.** Registration would fail with a less informative error. Stale-PID cleanup is deferred to the next successful startup.
 4. **If the call succeeds:** continue to the existing startup flow unchanged (stale-PID cleanup, snooze handling, session-instance persistence, signal-file check, registration call, output the normal connected line).
 
-**Why this hook, not a new subcommand:** `startup` already does one server round-trip (registration). Adding a `/api/health` GET in front of it is a few lines of TypeScript and reuses the same HTTP client helper. There is no other consumer for a separate `mcp-check` subcommand.
+The existing `hookRequest` function only supports POST; we add a small sibling helper `hookGet(path)` (or extend `hookRequest` with a method parameter) that issues a GET and returns `null` on any error. The helper lives next to `hookRequest` in `bin/icc.ts`.
 
-**Why pre-check, not post-check:** if the server is down, registration fails anyway, and the more-informative "MCP unreachable" message loses to the less-informative "registration failed" message if we let registration run first.
+**Why skip stale-PID cleanup on unreachable:** the cleanup is defensive housekeeping that is always safe to defer to the next startup. Not running it on an unreachable-server startup saves ~20 ms of filesystem iteration and keeps the hook behavior simple: "server is down, bail early, do nothing else."
 
-**Why also skip stale-PID cleanup on unreachable:** the cleanup is defensive housekeeping that is always safe to defer to the next startup. Not running it on an unreachable-server startup saves ~20 ms of filesystem iteration and keeps the hook's behavior simple: "server is down, bail early, do nothing else."
+#### Component 3b: Docker — `/setup/claude-code` hooks template
 
-**Docker parity:** the existing hook infrastructure already routes `/api/health` through `localBaseUrl`, which on Docker hosts is `http://localhost:3178`. The health pre-check inherits this automatically. No Docker-specific code path is needed.
+**File:** `src/server.ts`, the `/setup/claude-code` response payload, specifically the `hooks.SessionStart[0].hooks[0].command` (the `startup` matcher entry) and the `hooks.SessionStart[1].hooks[0].command` (the `resume` matcher entry) and the `hooks.SessionStart[3].hooks[0].command` (the `clear` matcher entry). All three currently contain:
+
+```bash
+curl -sf -X POST http://localhost:3178/api/hook/startup -H 'Authorization: Bearer <localToken>' -H 'Content-Type: application/json' -d '{"instance":"'"$(basename $PWD)"'"}'
+```
+
+**New shape** (the health pre-check wraps the existing POST):
+
+```bash
+curl -sf -m 1 -H 'Authorization: Bearer <localToken>' http://localhost:3178/api/health > /dev/null 2>&1 || { echo 'ICC: server not reachable. Run /mcp to reconnect, then /watch to activate.'; exit 0; }; curl -sf -X POST http://localhost:3178/api/hook/startup -H 'Authorization: Bearer <localToken>' -H 'Content-Type: application/json' -d '{"instance":"'"$(basename $PWD)"'"}'
+```
+
+Two changes in the one-liner:
+- Prepended: `curl -sf -m 1 ... /api/health || { echo "..."; exit 0; }` — hits the health endpoint with a 1-second `-m` timeout, and on any failure emits the unreachable line and exits 0 (so the hook does not fail — it just reports and bails)
+- The existing POST continues unchanged after the `;`
+
+The `{authHeader}` string templating already exists in the server's payload-building code, so both curl calls get the Bearer header automatically. No shell-level indirection or env var is needed.
+
+**Why `exit 0` instead of `exit 1`:** hook commands that exit nonzero are treated by Claude Code as errors and surfaced in a way that interrupts the UX. We explicitly want the "server unreachable" case to be a soft warning, not a hook failure. Exit 0 keeps the session proceeding normally with just the advisory line in stdout.
+
+**Why pre-check on `startup`, `resume`, and `clear` but not `compact` / `UserPromptSubmit`:** the spec's intent is the hint appears at *session-open* time. `compact` is mid-session. `UserPromptSubmit` is mid-session. The `resume` and `clear` matchers are session-open equivalents (resume from a prior session, re-fire after /clear), so they get the same treatment as `startup`.
+
+#### Why two implementations, not one abstraction
+
+An earlier draft of this spec claimed the health check was inherited "automatically" via `localBaseUrl`, but that was wrong: `localBaseUrl` is a server-side template variable used when *building* the `/setup/claude-code` payload. The bare-metal hook at `bin/icc.ts:610` calls `hookRequest` directly, not through any template string, so no `localBaseUrl` substitution ever touches it. The two hook runtimes are genuinely independent and need independent changes. Keeping them parallel (same user-visible output, same logic, different implementations) is the correct design given the runtime split.
 
 ## Files touched
 
 - `src/server.ts` — `/api/watch` handler: check `sessionReconnect` return, return 410 on unknown token (~5 lines)
 - `src/server.ts` — `/setup/claude-code` skill template: new stale-token branch in `/watch` skill step 7 + change curl invocation to not use `-f` (~10 lines in the template string)
-- `bin/icc.ts` — `hook startup` health pre-check + early-exit on unreachable (~25 lines)
+- `src/server.ts` — `/setup/claude-code` hooks template: wrap the `SessionStart[startup|resume|clear]` curl commands with a `/api/health` pre-check (~15 lines in the template strings — three matchers × one prepended guard each)
+- `bin/icc.ts` — `hook startup` health pre-check + early-exit on unreachable (~25 lines), plus new `hookGet` helper (~20 lines)
 - `test/server.test.ts` — new test for `/api/watch` 410 path on stale token
-- `test/server.test.ts` or equivalent — new test for the `skills.watch.content` template containing the `stale_token` branch
-- `test/hooks.test.ts` — new test for `hook startup` health pre-check behavior
+- `test/server.test.ts` or equivalent — new tests for the `/setup/claude-code` payload: `skills.watch.content` contains `stale_token` branch; `hooks.SessionStart[*].command` for startup/resume/clear contains the health pre-check prefix
+- `test/hooks.test.ts` — new test for `hook startup` health pre-check behavior (bare-metal)
 
 **No changes to:**
 - `docs/claude-code-setup.md` (bare-metal `/watch` skill is unchanged)
