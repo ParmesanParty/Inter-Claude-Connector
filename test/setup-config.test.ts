@@ -398,6 +398,18 @@ describe('setup-config: buildHooksTemplate Docker drift detection', () => {
     assert.ok(!startupCmd.includes('manifest.*.json'), 'must not use a glob for the identity');
   });
 
+  it('Docker startup command reads manifest via docker exec (zero host state)', () => {
+    const tpl = buildHooksTemplate(dockerConfig());
+    const startupCmd: string = tpl.config.SessionStart.find((e: any) => e.matcher === 'startup')!.hooks[0]!.command;
+    // Manifest must live inside the container, accessed via docker exec
+    assert.match(startupCmd, /docker exec icc jq -r \.version \/home\/icc\/\.icc\/applied-config-manifest/);
+    // Must NOT reference $HOME/.icc on the host
+    assert.ok(
+      !startupCmd.includes('$HOME/.icc/applied-config-manifest'),
+      'startup hook must not read manifest from host $HOME/.icc'
+    );
+  });
+
   it('Docker startup command surfaces drift via jq parse of response', () => {
     const tpl = buildHooksTemplate(dockerConfig());
     const startupCmd: string = tpl.config.SessionStart.find((e: any) => e.matcher === 'startup')!.hooks[0]!.command;
@@ -547,10 +559,26 @@ describe('setup-config: Docker sync skill identity sourcing (B15 fix)', () => {
     );
   });
 
-  it('mkdir -p ~/.icc before manifest write', () => {
+  it('does NOT create any host-side ICC directory (zero host state)', () => {
     const tpl = buildSkillsTemplate(dockerConfig());
     const content = (tpl as any).sync.content;
-    assert.match(content, /mkdir -p "?\$HOME\/\.icc"?/);
+    assert.ok(!content.includes('mkdir -p $HOME/.icc'), 'must NOT mkdir $HOME/.icc on host');
+    assert.ok(!content.includes('mkdir -p "$HOME/.icc"'), 'must NOT mkdir "$HOME/.icc" on host');
+    assert.ok(!content.includes('mkdir -p ~/.icc'), 'must NOT mkdir ~/.icc on host');
+  });
+
+  it('manifest path points inside the container, not on host', () => {
+    const tpl = buildSkillsTemplate(dockerConfig());
+    const content = (tpl as any).sync.content;
+    assert.match(content, /MANIFEST_PATH="\/home\/icc\/\.icc\/applied-config-manifest/);
+    assert.ok(!content.includes('"$HOME/.icc/applied-config-manifest'), 'must NOT use $HOME/.icc as manifest path');
+  });
+
+  it('manifest reads/writes go through docker exec icc', () => {
+    const tpl = buildSkillsTemplate(dockerConfig());
+    const content = (tpl as any).sync.content;
+    assert.match(content, /docker exec icc cat "\$MANIFEST_PATH"/);
+    assert.match(content, /docker exec -i icc tee/);
   });
 
   it('CLAUDE.md migration handles canonical H1 ICC headings', () => {
