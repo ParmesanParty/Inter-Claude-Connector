@@ -45,6 +45,7 @@ export interface ConfigOverrides {
   remotes?: ICCConfig['remotes'];
   corsOrigins?: string[];
   tls?: { ca?: string | null };
+  localhostHttpPort?: number | null;
 }
 
 /**
@@ -61,6 +62,9 @@ export function isolateConfig(overrides: ConfigOverrides = {}): ICCConfig {
   config.server.localToken = overrides.localToken ?? null;
   config.server.peerTokens = overrides.peerTokens ?? {};
   if (overrides.corsOrigins) config.server.corsOrigins = overrides.corsOrigins;
+  if (overrides.localhostHttpPort !== undefined) {
+    config.server.localhostHttpPort = overrides.localhostHttpPort ?? undefined;
+  }
   if (overrides.tls) {
     if (overrides.tls.ca !== undefined) config.tls = { ca: overrides.tls.ca };
   }

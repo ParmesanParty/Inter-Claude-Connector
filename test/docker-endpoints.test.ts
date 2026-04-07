@@ -186,10 +186,10 @@ describe('POST /api/hook/pre-icc-message', () => {
 // ── Setup/bootstrapping endpoint ─────────────────────────────────────
 
 describe('GET /setup/claude-code', () => {
-  beforeEach(() => { isolateConfig(); reset(); });
+  beforeEach(() => { isolateConfig({ localhostHttpPort: 3178 }); reset(); });
 
   it('returns structured setup instructions without auth', async () => {
-    await withServer({}, async (port) => {
+    await withServer({ localhostHttpPort: 3178 }, async (port) => {
       const res = await httpJSON(port, 'GET', '/setup/claude-code');
       assert.equal(res.status, 200);
       assert.ok(res.data.instructions);
@@ -202,7 +202,7 @@ describe('GET /setup/claude-code', () => {
   });
 
   it('returns valid MCP config with HTTP transport', async () => {
-    await withServer({}, async (port) => {
+    await withServer({ localhostHttpPort: 3178 }, async (port) => {
       const res = await httpJSON(port, 'GET', '/setup/claude-code');
       assert.equal(res.data.mcp.config.type, 'http');
       assert.ok(res.data.mcp.config.url.includes('/mcp'));
@@ -211,7 +211,7 @@ describe('GET /setup/claude-code', () => {
   });
 
   it('includes all three skills', async () => {
-    await withServer({}, async (port) => {
+    await withServer({ localhostHttpPort: 3178 }, async (port) => {
       const res = await httpJSON(port, 'GET', '/setup/claude-code');
       const skills = res.data.skills;
       assert.ok(skills.watch);
@@ -225,7 +225,7 @@ describe('GET /setup/claude-code', () => {
   });
 
   it('hooks use dynamic instance names', async () => {
-    await withServer({}, async (port) => {
+    await withServer({ localhostHttpPort: 3178 }, async (port) => {
       const res = await httpJSON(port, 'GET', '/setup/claude-code');
       const hooksStr = JSON.stringify(res.data.hooks.config);
       assert.ok(hooksStr.includes('$(basename $PWD)'));
@@ -310,10 +310,10 @@ describe('/api/watch stale-token handling', () => {
 });
 
 describe('/setup/claude-code skill template: stale-token recovery', () => {
-  beforeEach(() => { isolateConfig(); reset(); });
+  beforeEach(() => { isolateConfig({ localhostHttpPort: 3178 }); reset(); });
 
   it('/watch skill content contains stale_token recovery branch', async () => {
-    await withServer({}, async (port) => {
+    await withServer({ localhostHttpPort: 3178 }, async (port) => {
       const res = await httpJSON(port, 'GET', '/setup/claude-code');
       assert.equal(res.status, 200);
       const watchContent: string = res.data.skills.watch.content;
@@ -333,7 +333,7 @@ describe('/setup/claude-code skill template: stale-token recovery', () => {
   });
 
   it('SessionStart startup/resume/clear commands include /api/health guard', async () => {
-    await withServer({}, async (port) => {
+    await withServer({ localhostHttpPort: 3178 }, async (port) => {
       const res = await httpJSON(port, 'GET', '/setup/claude-code');
       const matchers = ['startup', 'resume', 'clear'];
       for (const matcher of matchers) {
@@ -361,7 +361,7 @@ describe('/setup/claude-code skill template: stale-token recovery', () => {
   });
 
   it('/watch skill curl invocation does not use -f so error bodies reach the skill', async () => {
-    await withServer({}, async (port) => {
+    await withServer({ localhostHttpPort: 3178 }, async (port) => {
       const res = await httpJSON(port, 'GET', '/setup/claude-code');
       const watchContent: string = res.data.skills.watch.content;
       const step5Line = watchContent
@@ -372,6 +372,105 @@ describe('/setup/claude-code skill template: stale-token recovery', () => {
         !step5Line!.includes('-sf '),
         `watch curl line must not use -f flag; found: ${step5Line}`
       );
+    });
+  });
+});
+
+describe('/setup/claude-code returns setup payload version', () => {
+  beforeEach(() => { isolateConfig(); reset(); });
+
+  it('response has a version field that is a 12-char hex string', async () => {
+    await withServer({}, async (port) => {
+      const res = await httpJSON(port, 'GET', '/setup/claude-code');
+      assert.equal(res.status, 200);
+      assert.match(res.data.version, /^[0-9a-f]{12}$/);
+    });
+  });
+
+  it('response has hostMode field', async () => {
+    await withServer({}, async (port) => {
+      const res = await httpJSON(port, 'GET', '/setup/claude-code');
+      assert.ok(['docker', 'bare-metal'].includes(res.data.hostMode));
+    });
+  });
+
+  it('response has restartCategories with 4 entries', async () => {
+    await withServer({}, async (port) => {
+      const res = await httpJSON(port, 'GET', '/setup/claude-code');
+      assert.equal(res.data.restartCategories.mcp.action, 'in-session');
+      assert.equal(res.data.restartCategories.mcp.command, '/mcp');
+      assert.equal(res.data.restartCategories.hooks.action, 'next-session');
+      assert.equal(res.data.restartCategories.skills.action, 'immediate');
+      assert.equal(res.data.restartCategories.claudeMd.action, 'next-session');
+    });
+  });
+
+  it('hooks/skills shape is preserved', async () => {
+    await withServer({}, async (port) => {
+      const res = await httpJSON(port, 'GET', '/setup/claude-code');
+      const sessionStart = res.data.hooks.config.SessionStart;
+      assert.equal(sessionStart.length, 4);
+      const matchers = sessionStart.map((e: any) => e.matcher).sort();
+      assert.deepEqual(matchers, ['clear', 'compact', 'resume', 'startup']);
+      assert.ok(res.data.skills.watch);
+      assert.ok(res.data.skills.snooze);
+      assert.ok(res.data.skills.wake);
+    });
+  });
+});
+
+describe('/api/hook/startup returns setupVersion + drifted', () => {
+  beforeEach(() => { isolateConfig(); reset(); });
+
+  it('response has setupVersion (12-char hex)', async () => {
+    await withServer({}, async (port) => {
+      const res = await httpJSON(port, 'POST', '/api/hook/startup', { instance: 'test-instance' });
+      assert.equal(res.status, 200);
+      assert.match(res.data.setupVersion, /^[0-9a-f]{12}$/);
+    });
+  });
+
+  it('drifted is false when appliedVersion is missing', async () => {
+    await withServer({}, async (port) => {
+      const res = await httpJSON(port, 'POST', '/api/hook/startup', { instance: 'test' });
+      assert.equal(res.data.drifted, false);
+    });
+  });
+
+  it('drifted is false when appliedVersion is null (first sync)', async () => {
+    await withServer({}, async (port) => {
+      const res = await httpJSON(port, 'POST', '/api/hook/startup', { instance: 'test', appliedVersion: null });
+      assert.equal(res.data.drifted, false);
+    });
+  });
+
+  it('drifted is false when appliedVersion matches setupVersion', async () => {
+    await withServer({}, async (port) => {
+      const setup = await httpJSON(port, 'GET', '/setup/claude-code');
+      const res = await httpJSON(port, 'POST', '/api/hook/startup', {
+        instance: 'test',
+        appliedVersion: setup.data.version,
+      });
+      assert.equal(res.data.drifted, false);
+      assert.equal(res.data.setupVersion, setup.data.version);
+    });
+  });
+
+  it('drifted is true when appliedVersion is a stale string', async () => {
+    await withServer({}, async (port) => {
+      const res = await httpJSON(port, 'POST', '/api/hook/startup', {
+        instance: 'test',
+        appliedVersion: 'staleversion',
+      });
+      assert.equal(res.data.drifted, true);
+    });
+  });
+
+  it('preserves existing connected + unreadCount fields', async () => {
+    await withServer({}, async (port) => {
+      const res = await httpJSON(port, 'POST', '/api/hook/startup', { instance: 'test' });
+      assert.equal(typeof res.data.connected, 'boolean');
+      assert.equal(typeof res.data.unreadCount, 'number');
     });
   });
 });
