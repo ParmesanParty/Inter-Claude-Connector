@@ -109,6 +109,7 @@ export function httpJSON(
     const payload = body ? JSON.stringify(body) : null;
     const req = request(`http://127.0.0.1:${port}${path}`, {
       method,
+      timeout: 2000,
       headers: {
         ...(payload && { 'Content-Type': 'application/json' }),
         ...(token && { 'Authorization': `Bearer ${token}` }),
@@ -122,6 +123,7 @@ export function httpJSON(
       });
     });
     req.on('error', reject);
+    req.on('timeout', () => { req.destroy(new Error('httpJSON timeout')); });
     if (payload) req.write(payload);
     req.end();
   });

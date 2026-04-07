@@ -284,3 +284,27 @@ describe('GET /api/watch', () => {
     });
   });
 });
+
+describe('/api/watch stale-token handling', () => {
+  beforeEach(() => { isolateConfig(); reset(); });
+
+  it('returns 410 with stale_token error when session token is unknown', async () => {
+    await withServer({}, async (port) => {
+      const res = await httpJSON(port, 'GET', '/api/watch?instance=ghost&sessionToken=deadbeefcafebabe');
+      assert.equal(res.status, 410);
+      assert.deepEqual(res.data, { error: 'stale_token', action: 'reregister' });
+    });
+  });
+
+  it('does not strand unknown tokens in activeWatchers', async () => {
+    // Verified indirectly: a second request with the same bad token must
+    // still get 410 (not "duplicate") — proving the first request did not
+    // register the bad token.
+    await withServer({}, async (port) => {
+      await httpJSON(port, 'GET', '/api/watch?instance=ghost&sessionToken=deadbeefcafebabe');
+      const res2 = await httpJSON(port, 'GET', '/api/watch?instance=ghost&sessionToken=deadbeefcafebabe');
+      assert.equal(res2.status, 410);
+      assert.deepEqual(res2.data, { error: 'stale_token', action: 'reregister' });
+    });
+  });
+});

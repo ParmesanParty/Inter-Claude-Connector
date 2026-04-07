@@ -1228,8 +1228,16 @@ Re-register with the server and launch the watcher.
           sendJSON(res, 200, { event: 'duplicate' });
           return;
         }
+        // Check that the session still exists in the registry before accepting.
+        // sessionReconnect returns false when the token is unknown — e.g. after
+        // a server restart wiped the in-memory registry. Telling the client the
+        // token is dead (410 Gone) so it can re-register is the only way to
+        // recover from that state without stranding a zombie watcher.
+        if (!sessionReconnect(sessionToken)) {
+          sendJSON(res, 410, { error: 'stale_token', action: 'reregister' });
+          return;
+        }
         activeWatchers.set(sessionToken, res);
-        sessionReconnect(sessionToken);
       }
 
       // Immediate inbox check — return immediately if unread messages exist.
