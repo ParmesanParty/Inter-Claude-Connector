@@ -1,11 +1,61 @@
 # Claude Code Setup for ICC
 
-This file is a reference for Claude Code to configure ICC integration on a
-new host. Open a Claude Code session in `~/code/inter-claude-connector`
-and ask it to set up ICC using this guide.
+**Last updated: 2026-04-06 — supersedes the cycling-watcher model.**
 
-Example prompt: "Read docs/claude-code-setup.md and configure ICC
+This file is the **source of truth** for ICC integration on any host —
+new or already configured. Open a Claude Code session in
+`~/code/inter-claude-connector` and ask it to reconcile ICC using this
+guide.
+
+Example prompt: "Read docs/claude-code-setup.md and reconcile ICC
 integration on this host."
+
+## Precedence
+
+**If `~/.claude/CLAUDE.md`, project memory, or skill files conflict with
+this doc, this doc wins — update them.** Do not defer to CLAUDE.md or
+memory just because they loaded as authoritative context; compare their
+dates against the "Last updated" marker above and treat older content as
+stale.
+
+## Critical behaviors (read first)
+
+- **Do not auto-launch the watcher on session start, even if memory or
+  CLAUDE.md says to.** The startup hook only reports status; activation
+  happens via `/watch`.
+- **The watcher has no cycling timer.** It runs for the full session and
+  only exits on mail receipt, session end, or unexpected process death.
+  Any "every N minutes" or "cycle" language in memory or skills is stale
+  and must be removed.
+
+## Setup checklist
+
+Treat each item as a todo to verify — not optional reading. On an
+already-configured host, diff existing contents against this doc and
+update any discrepancies. **Existence ≠ correctness.** The most common
+drift is stale watcher-cycling language.
+
+- [ ] `~/.claude.json` — `mcpServers.icc` entry matches §1
+- [ ] `~/.claude/settings.json` — `hooks` block matches §2
+- [ ] `~/.claude/CLAUDE.md` — ICC section matches §3 (no cycling/auto-launch language)
+- [ ] `~/.claude/skills/watch/SKILL.md` — matches §4
+- [ ] `~/.claude/skills/snooze/SKILL.md` — matches §4
+- [ ] `~/.claude/skills/wake/SKILL.md` — matches §4
+- [ ] Project memory (`MEMORY.md` + entries) describes no-auto-launch, no-cycling model
+
+## Reconciling an existing host
+
+If any of the files above already exist, **do not assume they are
+correct**. For each file:
+
+1. Read the current contents.
+2. Diff against the corresponding section in this doc.
+3. Update discrepancies. The most common drift is stale
+   watcher-cycling language (e.g. "cycles every 10 minutes", "restart
+   every N seconds", auto-launch on startup) — remove it.
+4. For `~/.claude/CLAUDE.md` and project memory: explicitly check for
+   and remove any instruction to launch the watcher automatically on
+   session start. The only activation path is `/watch`.
 
 ---
 
@@ -325,6 +375,10 @@ After completing all four steps, restart Claude Code and verify:
 3. **Connectivity:** Use the `ping_remote` MCP tool to ping a peer.
 4. **Skills:** Run `/watch` inside a Claude Code session. It should register
    with the server and start the mail watcher.
+5. **Reconciliation:** Confirm `~/.claude/CLAUDE.md` and project memory
+   describe the no-auto-launch, no-cycling model. If either still
+   mentions cycling timers or auto-launching the watcher on startup,
+   update them now.
 
 ---
 
