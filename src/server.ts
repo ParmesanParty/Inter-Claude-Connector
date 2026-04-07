@@ -593,7 +593,7 @@ This is the activation point for a session — startup only checks status,
 5. **Launch the watcher.** Use the Bash tool with \`run_in_background: true\`
    and \`timeout: 600000\`:
    \`\`\`bash
-   RESULT=$(curl -sf${authHeader} "${localBaseUrl}/api/watch?instance=INSTANCE&sessionToken=TOKEN"); echo "$RESULT"
+   curl -sf${authHeader} "${localBaseUrl}/api/watch?instance=INSTANCE&sessionToken=TOKEN"
    \`\`\`
    (Replace INSTANCE and TOKEN with the values from steps 2 and 4.)
 
@@ -677,7 +677,7 @@ Re-register with the server and launch the watcher.
 4. **Launch the watcher.** Use the Bash tool with \`run_in_background: true\`
    and \`timeout: 600000\`:
    \`\`\`bash
-   RESULT=$(curl -sf${authHeader} "${localBaseUrl}/api/watch?instance=INSTANCE&sessionToken=TOKEN"); echo "$RESULT"
+   curl -sf${authHeader} "${localBaseUrl}/api/watch?instance=INSTANCE&sessionToken=TOKEN"
    \`\`\`
    (Replace INSTANCE and TOKEN with the values from steps 1 and 3.)
 
