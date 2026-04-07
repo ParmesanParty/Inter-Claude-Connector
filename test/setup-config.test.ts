@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { detectMode, buildHooksTemplate, type HostMode } from '../src/setup-config.ts';
+import { detectMode, buildHooksTemplate, buildSkillsTemplate, type HostMode } from '../src/setup-config.ts';
 import type { ICCConfig } from '../src/types.ts';
 
 function baseConfig(serverOverrides: Partial<ICCConfig['server']> = {}): ICCConfig {
@@ -155,5 +155,105 @@ describe('setup-config: buildHooksTemplate (parity)', () => {
     const bareMatchers = bare.config.SessionStart.map((e: any) => e.matcher).sort();
     assert.deepEqual(dockerMatchers, ['clear', 'compact', 'resume', 'startup']);
     assert.deepEqual(bareMatchers, ['clear', 'compact', 'resume', 'startup']);
+  });
+});
+
+describe('setup-config: buildSkillsTemplate (Docker mode)', () => {
+  function dockerConfig() {
+    return baseConfig({ localhostHttpPort: 3178, localToken: 'docker-tok' });
+  }
+
+  it('emits watch + snooze + wake skills (no sync yet — that comes in B11/B13)', () => {
+    const tpl = buildSkillsTemplate(dockerConfig());
+    assert.ok(tpl.watch, 'watch skill required');
+    assert.ok(tpl.snooze, 'snooze skill required');
+    assert.ok(tpl.wake, 'wake skill required');
+    assert.equal((tpl as any).sync, undefined, 'sync skill not added until B11/B13');
+  });
+
+  it('watch skill points at correct target path', () => {
+    const tpl = buildSkillsTemplate(dockerConfig());
+    assert.equal(tpl.watch.target, '~/.claude/skills/watch/SKILL.md');
+  });
+
+  it('watch skill content references curl + Bearer + localhost:3178', () => {
+    const tpl = buildSkillsTemplate(dockerConfig());
+    const content = tpl.watch.content;
+    assert.match(content, /curl/);
+    assert.match(content, /Authorization: Bearer docker-tok/);
+    assert.match(content, /http:\/\/localhost:3178\/api\/hook\/watch/);
+    assert.match(content, /http:\/\/localhost:3178\/api\/watch\?instance=/);
+  });
+
+  it('watch skill includes Plan C stale_token recovery branch in step 7', () => {
+    const tpl = buildSkillsTemplate(dockerConfig());
+    const content = tpl.watch.content;
+    assert.ok(content.includes('stale_token'), 'must include stale_token recovery');
+    assert.ok(content.includes('rm -f /tmp/icc-session-$PPID.token'), 'must delete stale token file');
+    assert.ok(content.includes('re-run this skill from step 3'), 'must instruct re-register');
+  });
+
+  it('watch skill curl on watcher launch does NOT use -f (so 410 body reaches skill)', () => {
+    const tpl = buildSkillsTemplate(dockerConfig());
+    const content = tpl.watch.content;
+    const watchLine = content.split('\n').find((l: string) => l.includes('/api/watch?instance='));
+    assert.ok(watchLine, 'watch curl line must exist');
+    assert.ok(!watchLine!.includes('-sf '), `watch line must use -s, not -sf: ${watchLine}`);
+  });
+
+  it('wake skill curl on watcher launch ALSO does NOT use -f (same reason)', () => {
+    const tpl = buildSkillsTemplate(dockerConfig());
+    const content = tpl.wake.content;
+    const watchLine = content.split('\n').find((l: string) => l.includes('/api/watch?instance='));
+    assert.ok(watchLine, 'wake curl line must exist');
+    assert.ok(!watchLine!.includes('-sf '), `wake line must use -s, not -sf: ${watchLine}`);
+  });
+
+  it('snooze skill content references /api/hook/snooze', () => {
+    const tpl = buildSkillsTemplate(dockerConfig());
+    assert.match(tpl.snooze.content, /\/api\/hook\/snooze/);
+    assert.match(tpl.snooze.content, /rm -f \/tmp\/icc-session-\$PPID\.token/);
+  });
+
+  it('all three skills have valid frontmatter (name + description + disable-model-invocation + user-invocable)', () => {
+    const tpl = buildSkillsTemplate(dockerConfig());
+    for (const name of ['watch', 'snooze', 'wake'] as const) {
+      const content = tpl[name].content;
+      assert.match(content, /^---\n/, `${name} must start with frontmatter`);
+      assert.match(content, /^name: \S+/m, `${name} must have name field`);
+      assert.match(content, /^description: /m, `${name} must have description field`);
+      assert.match(content, /^disable-model-invocation: true/m, `${name} disable-model-invocation`);
+      assert.match(content, /^user-invocable: true/m, `${name} user-invocable`);
+    }
+  });
+});
+
+describe('setup-config: buildSkillsTemplate (bare-metal mode)', () => {
+  function bareConfig() {
+    return baseConfig({ localToken: null });
+  }
+
+  it('emits watch + snooze + wake skills', () => {
+    const tpl = buildSkillsTemplate(bareConfig());
+    assert.ok(tpl.watch && tpl.snooze && tpl.wake);
+  });
+
+  it('watch skill uses "icc hook watch" not curl', () => {
+    const tpl = buildSkillsTemplate(bareConfig());
+    const content = tpl.watch.content;
+    assert.match(content, /icc hook watch/);
+    assert.ok(!content.includes('curl'), 'must not use curl');
+    assert.ok(!content.includes('Bearer'), 'must not include Bearer header');
+    assert.ok(!content.includes('/tmp/icc-session-$PPID.token'), 'bare-metal does not use the docker session token file');
+  });
+
+  it('snooze skill uses "icc hook snooze-watcher"', () => {
+    const tpl = buildSkillsTemplate(bareConfig());
+    assert.match(tpl.snooze.content, /icc hook snooze-watcher/);
+  });
+
+  it('wake skill uses "icc hook wake-watcher"', () => {
+    const tpl = buildSkillsTemplate(bareConfig());
+    assert.match(tpl.wake.content, /icc hook wake-watcher/);
   });
 });

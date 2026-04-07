@@ -89,6 +89,265 @@ function buildDockerHooks(config: ICCConfig): HooksTemplate {
   };
 }
 
+export interface SkillEntry {
+  target: string;
+  content: string;
+}
+
+export interface SkillsTemplate {
+  watch: SkillEntry;
+  snooze: SkillEntry;
+  wake: SkillEntry;
+  // sync? added in B11/B13
+}
+
+export function buildSkillsTemplate(config: ICCConfig): SkillsTemplate {
+  return detectMode(config) === 'docker'
+    ? buildDockerSkills(config)
+    : buildBareMetalSkills(config);
+}
+
+function buildDockerSkills(config: ICCConfig): SkillsTemplate {
+  const localBaseUrl = `http://localhost:${config.server.localhostHttpPort}`;
+  const authHeader = config.server.localToken ? ` -H 'Authorization: Bearer ${config.server.localToken}'` : '';
+  return {
+    watch: {
+      target: '~/.claude/skills/watch/SKILL.md',
+      content: `---
+name: watch
+description: Activate ICC — register instance with server and launch mail watcher
+disable-model-invocation: true
+user-invocable: true
+args: [--force] [--name <alt-name>]
+---
+
+# ICC Activation (Docker)
+
+Register this instance with the ICC server and launch the mail watcher.
+This is the activation point for a session — startup only checks status,
+\`/watch\` activates.
+
+## Steps
+
+1. **Check if a watcher is already running.** Use \`TaskOutput\` with
+   \`block: false\` on any known watcher task ID, or list background
+   tasks with \`/tasks\`. If a watcher task exists and is still running,
+   tell the user it's already active and do nothing else.
+
+2. **Resolve the instance name.** Run \`basename $PWD\` using the Bash tool
+   and save the result as INSTANCE. Use this literal value in all subsequent
+   steps — do NOT use \`$(basename $PWD)\` command substitution in later
+   commands, as it triggers user confirmation prompts that break the
+   automatic watcher lifecycle.
+
+3. **Register with the server.** Run this using the Bash tool:
+   \`\`\`bash
+   curl -sf -X POST ${localBaseUrl}/api/hook/watch${authHeader} \\
+     -H 'Content-Type: application/json' \\
+     -d '{"instance":"INSTANCE","pid":0}'
+   \`\`\`
+   (Replace INSTANCE with the value from step 2.)
+   Add \`,"force":true\` to the JSON if user passed \`--force\`.
+   Add \`,"name":"<alt>"\` if user passed \`--name\`.
+
+4. **Parse the response and handle:**
+   - If \`status\` is \`"deferred"\`: show the conflict to the user with options:
+     - \`/watch --force\` — evict the other session and take over
+     - \`/watch --name <alt>\` — register under a different name
+     - Cancel
+   - If \`status\` is \`"active"\`: save the session token:
+     \`\`\`bash
+     echo "SESSION_TOKEN_VALUE" > /tmp/icc-session-$PPID.token
+     \`\`\`
+     (Replace SESSION_TOKEN_VALUE with the \`sessionToken\` from the response.)
+
+5. **Launch the watcher.** Use the Bash tool with \`run_in_background: true\`
+   and \`timeout: 600000\`:
+   \`\`\`bash
+   curl -s${authHeader} "${localBaseUrl}/api/watch?instance=INSTANCE&sessionToken=TOKEN"
+   \`\`\`
+   (Replace INSTANCE and TOKEN with the values from steps 2 and 4.)
+
+6. **Confirm activation:** "ICC activated. Watching for messages."
+
+7. When the background task completes later, read its output and handle:
+   - If output contains \`"stale_token"\`: the session token was invalidated
+     (likely because the ICC container was restarted). Delete the stale
+     token file with \`rm -f /tmp/icc-session-$PPID.token\`, then silently
+     re-run this skill from step 3 (re-register) to acquire a fresh token
+     and relaunch the watcher. Do not tell the user — recovery is automatic.
+   - If output contains \`"mail"\`: call \`check_messages\` MCP tool, then
+     relaunch from step 5 (the existing token is still valid).
+   - Otherwise (connection dropped, process killed): silently relaunch
+     from step 5 (the existing token is still valid; the connection just
+     dropped transiently).`,
+    },
+    snooze: {
+      target: '~/.claude/skills/snooze/SKILL.md',
+      content: `---
+name: snooze
+description: Suppress automatic ICC mail watcher launches for this session
+disable-model-invocation: true
+user-invocable: true
+---
+
+# ICC Watcher Snooze (Docker)
+
+Suppress automatic watcher launches and deregister from the server.
+
+## Steps
+
+1. Read the session token:
+   \`\`\`bash
+   cat /tmp/icc-session-$PPID.token
+   \`\`\`
+
+2. Deregister with the server:
+   \`\`\`bash
+   curl -sf -X POST ${localBaseUrl}/api/hook/snooze${authHeader} \\
+     -H 'Content-Type: application/json' \\
+     -d '{"sessionToken":"TOKEN"}'
+   \`\`\`
+   (Replace TOKEN with the value from step 1.)
+
+3. Remove the token file:
+   \`\`\`bash
+   rm -f /tmp/icc-session-$PPID.token
+   \`\`\`
+
+4. Confirm: "ICC watcher snoozed. Use \`/wake\` to re-enable."`,
+    },
+    wake: {
+      target: '~/.claude/skills/wake/SKILL.md',
+      content: `---
+name: wake
+description: Re-enable ICC mail watcher after snoozing
+disable-model-invocation: true
+user-invocable: true
+---
+
+# ICC Watcher Wake (Docker)
+
+Re-register with the server and launch the watcher.
+
+## Steps
+
+1. **Resolve the instance name.** Run \`basename $PWD\` using the Bash tool
+   and save the result as INSTANCE. Use this literal value in all subsequent
+   steps — do NOT use \`$(basename $PWD)\` command substitution in later
+   commands, as it triggers user confirmation prompts that break the
+   automatic watcher lifecycle.
+
+2. **Re-register with the server:**
+   \`\`\`bash
+   curl -sf -X POST ${localBaseUrl}/api/hook/watch${authHeader} \\
+     -H 'Content-Type: application/json' \\
+     -d '{"instance":"INSTANCE","pid":0,"force":true}'
+   \`\`\`
+   (Replace INSTANCE with the value from step 1.)
+
+3. **Save the new session token** from the response:
+   \`\`\`bash
+   echo "SESSION_TOKEN_VALUE" > /tmp/icc-session-$PPID.token
+   \`\`\`
+
+4. **Launch the watcher.** Use the Bash tool with \`run_in_background: true\`
+   and \`timeout: 600000\`:
+   \`\`\`bash
+   curl -s${authHeader} "${localBaseUrl}/api/watch?instance=INSTANCE&sessionToken=TOKEN"
+   \`\`\`
+   (Replace INSTANCE and TOKEN with the values from steps 1 and 3.)
+
+5. Confirm: "ICC watcher re-activated."`,
+    },
+  };
+}
+
+function buildBareMetalSkills(_config: ICCConfig): SkillsTemplate {
+  return {
+    watch: {
+      target: '~/.claude/skills/watch/SKILL.md',
+      content: `---
+name: watch
+description: Activate ICC — register instance with server and launch mail watcher
+disable-model-invocation: true
+user-invocable: true
+args: [--force] [--name <alt-name>]
+---
+
+# ICC Activation (Bare-metal)
+
+Register this instance with the ICC server and launch the mail watcher.
+
+## Steps
+
+1. **Check if a watcher is already running.** Use \`TaskOutput\` with \`block: false\` on any known watcher task ID. If a watcher task exists and is still running, tell the user it's already active and do nothing else.
+
+2. **Launch the watcher** via the Bash tool with \`run_in_background: true\` and \`timeout: 600000\`:
+   \`\`\`bash
+   icc hook watch
+   \`\`\`
+   Add \`--force\` if the user passed \`--force\`. Add \`--name <alt>\` if the user passed \`--name\`.
+
+3. **Confirm activation:** "ICC activated. Watching for messages."
+
+4. When the background task completes later, read its output and handle:
+   - If output contains \`[ICC] Stale session token\`: silently re-run this skill from step 2 (the watcher CLI handles re-registration internally; just relaunch).
+   - If output contains \`[ICC] Mail received\`: call \`check_messages\` MCP tool, then relaunch from step 2.
+   - Otherwise (connection dropped, process killed): silently relaunch from step 2.`,
+    },
+    snooze: {
+      target: '~/.claude/skills/snooze/SKILL.md',
+      content: `---
+name: snooze
+description: Suppress automatic ICC mail watcher launches for this session
+disable-model-invocation: true
+user-invocable: true
+---
+
+# ICC Watcher Snooze (Bare-metal)
+
+Suppress automatic watcher launches.
+
+## Steps
+
+1. Run via the Bash tool:
+   \`\`\`bash
+   icc hook snooze-watcher
+   \`\`\`
+
+2. Confirm: "ICC watcher snoozed. Use \`/wake\` to re-enable."`,
+    },
+    wake: {
+      target: '~/.claude/skills/wake/SKILL.md',
+      content: `---
+name: wake
+description: Re-enable ICC mail watcher after snoozing
+disable-model-invocation: true
+user-invocable: true
+---
+
+# ICC Watcher Wake (Bare-metal)
+
+Re-enable the watcher after a snooze.
+
+## Steps
+
+1. Run via the Bash tool:
+   \`\`\`bash
+   icc hook wake-watcher
+   \`\`\`
+
+2. **Launch the watcher** via the Bash tool with \`run_in_background: true\` and \`timeout: 600000\`:
+   \`\`\`bash
+   icc hook watch
+   \`\`\`
+
+3. Confirm: "ICC watcher re-activated."`,
+    },
+  };
+}
+
 function buildBareMetalHooks(_config: ICCConfig): HooksTemplate {
   const startup: HookEntry = { type: 'command', command: 'icc hook startup 2>/dev/null || true', timeout: 10 };
   const check: HookEntry = { type: 'command', command: 'icc hook check 2>/dev/null || true', timeout: 5 };
