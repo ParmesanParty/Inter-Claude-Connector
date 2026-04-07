@@ -371,3 +371,71 @@ describe('setup-config: buildSetupPayload', () => {
     assert.notEqual(a.version, b.version);
   });
 });
+
+describe('setup-config: buildHooksTemplate Docker drift detection', () => {
+  function dockerConfig() {
+    return baseConfig({ localhostHttpPort: 3178, localToken: 'docker-tok' });
+  }
+
+  it('Docker startup command references applied-config-manifest path', () => {
+    const tpl = buildHooksTemplate(dockerConfig());
+    const startupCmd: string = tpl.config.SessionStart.find((e: any) => e.matcher === 'startup')!.hooks[0]!.command;
+    assert.match(startupCmd, /applied-config-manifest/);
+  });
+
+  it('Docker startup command uses jq to read the manifest version', () => {
+    const tpl = buildHooksTemplate(dockerConfig());
+    const startupCmd: string = tpl.config.SessionStart.find((e: any) => e.matcher === 'startup')!.hooks[0]!.command;
+    assert.match(startupCmd, /jq/);
+  });
+
+  it('Docker startup command interpolates identity at template time (not glob)', () => {
+    const cfg = baseConfig({ localhostHttpPort: 3178, localToken: 't' });
+    cfg.identity = 'rpi1-test';
+    const tpl = buildHooksTemplate(cfg);
+    const startupCmd: string = tpl.config.SessionStart.find((e: any) => e.matcher === 'startup')!.hooks[0]!.command;
+    assert.match(startupCmd, /applied-config-manifest\.rpi1-test\.json/);
+    assert.ok(!startupCmd.includes('manifest.*.json'), 'must not use a glob for the identity');
+  });
+
+  it('Docker startup command surfaces drift via jq parse of response', () => {
+    const tpl = buildHooksTemplate(dockerConfig());
+    const startupCmd: string = tpl.config.SessionStart.find((e: any) => e.matcher === 'startup')!.hooks[0]!.command;
+    assert.match(startupCmd, /Config drifted/);
+    assert.match(startupCmd, /\.drifted/);
+  });
+
+  it('Docker startup command emits "not yet synced" when manifest is missing', () => {
+    const tpl = buildHooksTemplate(dockerConfig());
+    const startupCmd: string = tpl.config.SessionStart.find((e: any) => e.matcher === 'startup')!.hooks[0]!.command;
+    assert.match(startupCmd, /not yet synced/);
+  });
+
+  it('Docker resume and clear matchers get the same shape as startup', () => {
+    const tpl = buildHooksTemplate(dockerConfig());
+    const startupCmd: string = tpl.config.SessionStart.find((e: any) => e.matcher === 'startup')!.hooks[0]!.command;
+    const resumeCmd: string = tpl.config.SessionStart.find((e: any) => e.matcher === 'resume')!.hooks[0]!.command;
+    const clearCmd: string = tpl.config.SessionStart.find((e: any) => e.matcher === 'clear')!.hooks[0]!.command;
+    assert.equal(resumeCmd, startupCmd);
+    assert.equal(clearCmd, startupCmd);
+  });
+
+  it('Docker startup command STILL includes the Plan C health pre-check guard', () => {
+    const tpl = buildHooksTemplate(dockerConfig());
+    const startupCmd: string = tpl.config.SessionStart.find((e: any) => e.matcher === 'startup')!.hooks[0]!.command;
+    assert.ok(startupCmd.includes('/api/health'), 'must retain health guard');
+    assert.ok(
+      startupCmd.includes('ICC: server not reachable. Run /mcp to reconnect, then /watch to activate.'),
+      'must retain exact UNREACHABLE_HINT wording'
+    );
+    assert.ok(startupCmd.includes('exit 0'), 'must retain exit 0 on health failure');
+  });
+
+  it('compact matcher is unchanged — no drift detection, no health guard', () => {
+    const tpl = buildHooksTemplate(dockerConfig());
+    const compactCmd: string = tpl.config.SessionStart.find((e: any) => e.matcher === 'compact')!.hooks[0]!.command;
+    assert.ok(!compactCmd.includes('applied-config-manifest'), 'compact must not read manifest');
+    assert.ok(!compactCmd.includes('/api/health'), 'compact must not have health guard');
+    assert.match(compactCmd, /\/api\/hook\/heartbeat/);
+  });
+});
