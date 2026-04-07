@@ -34,17 +34,53 @@ After setup, the container transitions to normal mode automatically (no restart 
 > (via the setup wizard or a pre-existing config volume). This configures
 > Claude Code on the **host machine** to talk to the containerized ICC server.
 
-### Recommended: Automatic Setup
+### The setup endpoint — `GET /setup/claude-code`
 
-The ICC server provides a self-configuration endpoint. Open any Claude Code
-session and paste this prompt:
+**This is the canonical re-access point for Claude Code configuration on
+Docker hosts.** It returns structured JSON with MCP config, hooks,
+CLAUDE.md content, and skill definitions (`/watch`, `/snooze`, `/wake`).
+Any Claude Code instance on the host can fetch it, apply the configs,
+and restart to integrate with ICC — no manual doc hunting.
 
-> Set up ICC integration by fetching and applying the configuration from http://localhost:3179/setup/claude-code
+**Authentication:**
 
-Claude Code will fetch the endpoint, which returns structured JSON with MCP
-config, hooks, CLAUDE.md content, and skill definitions (`/watch`, `/snooze`,
-`/wake`). It will write each config to the appropriate file and prompt you to
-restart.
+- **During the wizard flow:** gated by a one-time `setupToken` passed as
+  `?token=<token>` in the URL. The wizard completion page surfaces the
+  full URL with token embedded.
+- **After the wizard completes** (setup token consumed): gated by the
+  server's `localToken`, passed as an HTTP `Authorization: Bearer
+  <localToken>` header. Retrieve `localToken` from the running container:
+
+  ```bash
+  docker exec icc cat /home/icc/.icc/config.json | grep -oP '"localToken"\s*:\s*"\K[^"]+'
+  ```
+
+  Then fetch the setup config:
+
+  ```bash
+  curl -H "Authorization: Bearer <localToken>" http://localhost:3179/setup/claude-code
+  ```
+
+### Recommended: Automatic Setup (fresh wizard run)
+
+Immediately after running the wizard, open any Claude Code session and
+paste the prompt shown on the wizard completion page. It looks like:
+
+> Set up ICC integration by fetching and applying the configuration from http://localhost:3179/setup/claude-code?token=<setupToken>
+
+Claude Code will fetch the endpoint, write each config to the appropriate
+file, and prompt you to restart.
+
+### Re-accessing setup after the wizard
+
+If you spin up a new Claude Code instance on the host later (or the
+wizard token is already consumed), give the instance this prompt:
+
+> The ICC container is already initialized. Fetch setup from
+> `http://localhost:3179/setup/claude-code` using `Authorization: Bearer
+> <localToken>`. Get `localToken` via `docker exec icc cat
+> /home/icc/.icc/config.json`. Apply the returned configs and ask me to
+> restart Claude Code.
 
 After restarting, the SessionStart hook will confirm connectivity:
 `ICC: connected, N unread. Run /watch to activate.`
