@@ -90,7 +90,7 @@ describe('Heartbeat: startup is status-only', () => {
 
   it('startup outputs activation prompt', () => {
     const stdout = runHook('startup', { HOME: tmp.tmpHome });
-    assert.ok(stdout.includes('Run /watch to activate'), 'should show activation prompt');
+    assert.ok(stdout.includes('/watch to activate'), 'should show activation prompt');
     assert.ok(!stdout.includes('[ICC] Start mail watcher'), 'should NOT trigger launch');
   });
 });
@@ -183,14 +183,14 @@ describe('Snooze: startup respects snooze state', () => {
     const stdout = runHook('startup', { HOME: tmp.tmpHome });
     // Startup is now status-only — no snooze/launch messaging
     assert.ok(!stdout.includes('[ICC] Start mail watcher'), 'should NOT trigger launch');
-    assert.ok(stdout.includes('Run /watch to activate'), 'should show activation prompt');
+    assert.ok(stdout.includes('/watch to activate'), 'should show activation prompt');
   });
 
   it('startup clears stale snooze on fresh session (no session file)', () => {
     writeFileSync(join(tmp.tmpHome, '.icc', `watcher.${instanceName}.snoozed`), new Date().toISOString());
     const stdout = runHook('startup', { HOME: tmp.tmpHome });
     // Startup is status-only — just verify snooze file was cleared
-    assert.ok(stdout.includes('Run /watch to activate'), 'should show activation prompt');
+    assert.ok(stdout.includes('/watch to activate'), 'should show activation prompt');
     const snoozePath = join(tmp.tmpHome, '.icc', `watcher.${instanceName}.snoozed`);
     assert.ok(!existsSync(snoozePath), 'stale snooze file should be deleted');
   });

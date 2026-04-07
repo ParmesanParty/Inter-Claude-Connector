@@ -565,6 +565,50 @@ async function hookRequest(path: string, body: Record<string, unknown>): Promise
   });
 }
 
+/**
+ * GET-variant of hookRequest for health checks and other non-mutating calls.
+ * Returns parsed JSON on success, or null on any error (connection refused,
+ * timeout, non-2xx, JSON parse failure). 1-second timeout — intentionally
+ * short so it does not delay a healthy SessionStart.
+ */
+async function hookGet(path: string): Promise<any> {
+  // /api/health requires no auth (verified in src/server.ts), so we send no
+  // Authorization header. If you extend hookGet to other endpoints later,
+  // decide auth on a per-call basis.
+  const { loadConfig, getTlsOptions, createIdentityVerifier } = await import('../src/config.ts');
+  const config = loadConfig();
+  const port = config.server.port;
+  const tlsOpts = getTlsOptions(config);
+  const requestFn = tlsOpts
+    ? (await import('node:https')).request
+    : request;
+
+  return new Promise<any>((resolve) => {
+    const req = requestFn({
+      hostname: '127.0.0.1',
+      port,
+      path,
+      method: 'GET',
+      timeout: 1000,
+      ...(tlsOpts ? { ...tlsOpts, checkServerIdentity: createIdentityVerifier(config.identity) } : {}),
+    }, (res: any) => {
+      if (res.statusCode && (res.statusCode < 200 || res.statusCode >= 300)) {
+        res.resume();
+        resolve(null);
+        return;
+      }
+      let data = '';
+      res.on('data', (chunk: string) => { data += chunk; });
+      res.on('end', () => {
+        try { resolve(JSON.parse(data)); } catch { resolve(null); }
+      });
+    });
+    req.on('error', () => resolve(null));
+    req.on('timeout', () => { req.destroy(); resolve(null); });
+    req.end();
+  });
+}
+
 async function hook() {
   const subcommand = positional[0];
   const { resolve: resolveInstance } = await import('../src/instances.ts');
@@ -606,12 +650,21 @@ async function hook() {
       // Check signal files → stdout (fallback for when server is down)
       const signal = checkSignalFiles(instanceName);
       if (signal) process.stdout.write(signal + '\n');
+      // Health pre-check: if the local server is down, emit an unreachable
+      // hint and skip registration. Local filesystem work (signal files,
+      // session persistence, stale cleanup) has already been done above and
+      // is independent of server liveness.
+      const health = await hookGet('/api/health');
+      if (health === null) {
+        process.stdout.write('ICC: server not reachable. Run /mcp to reconnect, then /watch to activate.\n');
+        break;
+      }
       // Query server for connection status + unread count (non-fatal)
       const startupResult = await hookRequest('/api/hook/startup', { instance: instanceName });
       if (startupResult?.connected) {
         process.stdout.write(`ICC: connected, ${startupResult.unreadCount} unread. Run /watch to activate.\n`);
       } else {
-        process.stdout.write('ICC: server not reachable. Run /watch to activate when ready.\n');
+        process.stdout.write('ICC: server not reachable. Run /mcp to reconnect, then /watch to activate.\n');
       }
       break;
     }
